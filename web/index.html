@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090c17">
+  <meta name="description" content="Repair malformed LLM tool calls, inspect each edit, and validate the result in your browser with MoonBit.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="engine.js"></script>
+  <script defer src="app.js"></script>
+  <title>JSON Repair Playground · MoonBit</title>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="wordmark" href="index.html" aria-label="Moon JSON Repair playground home"><span class="logo" aria-hidden="true">{ }</span> moon<span>_</span>json<span>_</span>repair</a>
+      <span class="local"><span aria-hidden="true"></span> Runs in your browser</span>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="hero" aria-labelledby="title">
+      <div class="orbit" aria-hidden="true"><i></i><b></b><span></span></div>
+      <h1 id="title">JSON Repair <em>Playground</em></h1>
+      <p>Fix malformed tool calls, see each edit, and validate the result against a schema.</p>
+    </section>
+
+    <section class="workspace" aria-label="JSON repair workspace">
+      <div class="samples">
+        <span class="toolbar-label" id="samples-label">Try a sample</span>
+        <div class="sample-list" id="samples" role="group" aria-labelledby="samples-label"></div>
+        <button class="stream-button" id="stream" type="button"><span class="play-icon" aria-hidden="true"></span><span id="stream-label">Simulate stream</span></button>
+      </div>
+
+      <div class="editor-grid">
+        <div class="editor-card">
+          <div class="panel-heading">
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">›_</span><h2 id="source-label">Model output</h2></div>
+            <span class="panel-meta" id="source-meta"></span>
+          </div>
+          <div class="editor-body source-body">
+            <div class="gutter" id="source-gutter" aria-hidden="true"></div>
+            <textarea id="source" aria-labelledby="source-label" placeholder="Paste or type a tool call…" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+          </div>
+          <div class="editor-foot"><span id="source-state">Editable input</span><span>UTF-16 positions</span></div>
+        </div>
+
+        <div class="editor-card output-card">
+          <div class="panel-heading">
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">{ }</span><h2 id="output-label">Repaired JSON</h2></div>
+            <button class="text-button" id="copy" type="button" disabled><span class="copy-icon" aria-hidden="true"></span><span id="copy-label">Copy</span></button>
+          </div>
+          <div class="editor-body output-body" id="result-panel">
+            <div class="gutter" id="result-gutter" aria-hidden="true"></div>
+            <pre id="output-wrap" aria-labelledby="output-label" tabindex="0"><code id="output"></code></pre>
+          </div>
+          <div class="editor-foot"><span id="repair-state" role="status"></span><span id="elapsed"></span></div>
+        </div>
+      </div>
+
+      <div class="inspect-grid">
+        <section class="inspect-card" aria-labelledby="audit-label">
+          <div class="panel-heading">
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">≡</span><h2 id="audit-label">Repair audit</h2></div>
+            <span class="status-pill" id="audit-count"></span>
+          </div>
+          <div class="inspect-content" id="audit-body">
+            <p class="empty" id="audit-empty"></p>
+            <ol class="audit-list" id="audit"></ol>
+          </div>
+        </section>
+
+        <section class="inspect-card" aria-labelledby="schema-label">
+          <div class="panel-heading">
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">✓</span><h2 id="schema-label">Schema validation</h2></div>
+            <span class="status-pill" id="schema-state" role="status"></span>
+          </div>
+          <div class="inspect-content" id="schema-body">
+            <p class="schema-summary" id="schema-summary"></p>
+            <ul class="schema-errors" id="schema-errors"></ul>
+            <details>
+              <summary>Edit schema</summary>
+              <label class="sr-only" for="schema">JSON Schema</label>
+              <textarea id="schema" placeholder="Leave blank to skip validation" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+            </details>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <noscript><p>Enable JavaScript to use the local MoonBit engine.</p></noscript>
+    <footer><span>Built with MoonBit</span><span>Apache-2.0</span></footer>
+  </main>
+</body>
+</html>

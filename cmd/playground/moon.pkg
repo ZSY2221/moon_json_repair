@@ -1,0 +1,12 @@
+import {
+  "moonbitlang/core/json",
+  "ZSY2221/json_repair" @repair,
+}
+
+pkgtype(kind: "foreign_library")
+
+supported_targets = "js"
+
+options(
+  link: { "js": { "format": "iife" } },
+)
