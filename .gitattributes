@@ -1,0 +1,10 @@
+* text=auto
+*.mbt text eol=lf
+*.mbti text eol=lf
+*.md text eol=lf
+*.mod text eol=lf
+*.pkg text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
+*.png binary
