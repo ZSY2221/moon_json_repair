@@ -4,34 +4,61 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090c17">
-  <meta name="description" content="Repair malformed LLM tool calls, inspect each edit, and validate the result in your browser with MoonBit.">
+  <meta name="description" content="Stream incomplete tool calls through MoonBit, inspect repair and schema edits, and export lossless reports.">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./style.css">
   <script defer src="./engine.js"></script>
   <script defer src="./examples.js"></script>
+  <script defer src="./json-view.js"></script>
   <script defer src="./app.js"></script>
-  <title>JSON Repair Playground · MoonBit</title>
+  <title>LLM Stream Repair Lab · MoonBit</title>
 </head>
 <body>
   <header class="site-header">
     <div class="shell header-inner">
-      <a class="wordmark" href="./index.html" aria-label="Moon JSON Repair playground home"><span class="logo" aria-hidden="true">{ }</span> moon<span>_</span>json<span>_</span>repair</a>
-      <span class="local"><span aria-hidden="true"></span> Runs in your browser</span>
+      <a class="wordmark" href="./index.html" aria-label="Moon JSON Repair lab home"><span class="logo" aria-hidden="true">{ }</span> moon<span>_</span>json<span>_</span>repair</a>
+      <span class="local"><span aria-hidden="true"></span> MoonBit JS engine · Runs locally</span>
     </div>
   </header>
 
   <main class="shell">
     <section class="hero" aria-labelledby="title">
       <div class="orbit" aria-hidden="true"><i></i><b></b><span></span></div>
-      <h1 id="title">JSON Repair <em>Playground</em></h1>
-      <p>Fix malformed tool calls, see each edit, and validate the result against a schema.</p>
+      <h1 id="title">LLM Stream <em>Repair Lab</em></h1>
+      <p>Replay a tool call token by token, inspect each repair, and retry with feedback from your schema.</p>
     </section>
 
     <section class="workspace" aria-label="JSON repair workspace">
       <div class="samples">
-        <span class="toolbar-label" id="samples-label">Try a sample</span>
+        <span class="toolbar-label" id="samples-label">Test inputs</span>
         <div class="sample-list" id="samples" role="group" aria-labelledby="samples-label"></div>
-        <button class="stream-button" id="stream" type="button"><span class="play-icon" aria-hidden="true"></span><span id="stream-label">Simulate stream</span></button>
+      </div>
+
+      <div class="control-deck">
+        <div class="transport" role="group" aria-label="Simulated token stream">
+          <button class="stream-button" id="stream" type="button"><span class="play-icon" aria-hidden="true"></span><span id="stream-label">模拟 LLM 实时流式输出</span></button>
+          <button class="text-button control-button" id="step" type="button" aria-label="Step one simulated token">Step</button>
+          <button class="text-button control-button" id="replay" type="button" aria-label="Replay stream">Replay</button>
+          <label class="sr-only" for="speed">Simulated token speed</label>
+          <select id="speed"><option value="30">30 tok/s</option><option value="60" selected>60 tok/s</option><option value="120">120 tok/s</option></select>
+        </div>
+        <div class="mode-switches" role="group" aria-label="Repair options">
+          <label><input id="enable-json5" type="checkbox"> JSON5 numbers</label>
+          <label><input id="enable-coercion" type="checkbox"> Schema coercion</label>
+          <label><input id="enable-extraction" type="checkbox"> Extract calls</label>
+        </div>
+      </div>
+
+      <div id="stream-instrument" class="stream-instrument" aria-label="Incremental stream status">
+        <span id="stream-count">Ready · simulated tokens</span>
+        <progress id="stream-progress" aria-label="Stream progress" max="1" value="0"></progress>
+        <span id="stream-stack">Depth 0 · stack ∅</span>
+        <span id="stream-boundary">No checkpoint</span>
+      </div>
+
+      <div class="block-picker" id="block-picker" hidden>
+        <span class="toolbar-label" id="blocks-label">Extracted blocks</span>
+        <div class="sample-list" id="blocks" role="group" aria-labelledby="blocks-label"></div>
       </div>
 
       <div class="editor-grid">
@@ -42,7 +69,10 @@
           </div>
           <div class="editor-body source-body">
             <div class="gutter" id="source-gutter" aria-hidden="true"></div>
-            <textarea id="source" aria-labelledby="source-label" placeholder="Paste or type a tool call…" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+            <div class="source-entry">
+              <pre class="source-marking" id="source-marking" aria-hidden="true"></pre>
+              <textarea id="source" aria-labelledby="source-label" placeholder="Paste or type a tool call…" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+            </div>
           </div>
           <div class="editor-foot"><span id="source-state">Editable input</span><span>UTF-16 positions</span></div>
         </div>
@@ -50,7 +80,10 @@
         <div class="editor-card output-card">
           <div class="panel-heading">
             <div class="panel-title"><span class="heading-icon" aria-hidden="true">{ }</span><h2 id="output-label">Repaired JSON</h2></div>
-            <button class="text-button" id="copy" type="button" disabled><span class="copy-icon" aria-hidden="true"></span><span id="copy-label">Copy</span></button>
+            <div class="editor-actions">
+              <button class="text-button" id="copy" type="button" disabled><span class="copy-icon" aria-hidden="true"></span><span id="copy-label">Copy JSON</span></button>
+              <button class="text-button export-button" id="download" type="button" disabled>Download Lossless Report <span>(.json)</span></button>
+            </div>
           </div>
           <div class="editor-body output-body" id="result-panel">
             <div class="gutter" id="result-gutter" aria-hidden="true"></div>
@@ -88,6 +121,20 @@
           </div>
         </section>
       </div>
+
+      <section class="retry-card" id="retry-card" aria-labelledby="retry-label" hidden>
+        <div class="panel-heading"><div class="panel-title"><span class="heading-icon" aria-hidden="true">↻</span><h2 id="retry-label">Agent Retry Prompt</h2></div><button class="text-button" id="copy-retry" type="button">Copy prompt</button></div>
+        <pre id="retry-prompt" tabindex="0"></pre>
+      </section>
+
+      <section class="benchmark" aria-labelledby="benchmark-label">
+        <div class="benchmark-info"><h2 id="benchmark-label">In-browser benchmark</h2><p>10,000 attempts per engine · truncated tool call</p></div>
+        <div class="bench-metrics">
+          <div class="bench-result"><span>MoonBit repair</span><strong id="bench-repair">—</strong><small id="bench-repair-detail">Recovery · latency · throughput</small></div>
+          <div class="bench-result"><span>JSON.parse</span><strong id="bench-strict">—</strong><small id="bench-strict-detail">Baseline on the same input</small></div>
+        </div>
+        <div class="bench-action"><button class="stream-button" id="benchmark" type="button">⚡ Run 10,000 attempts</button><progress id="bench-progress" aria-label="Benchmark progress" max="10000" value="0"></progress><span id="bench-state" role="status">Measured on this device</span></div>
+      </section>
     </section>
 
     <noscript><p>Enable JavaScript to use the local MoonBit engine.</p></noscript>

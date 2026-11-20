@@ -1,5 +1,6 @@
 import {
   "moonbitlang/core/json",
+  "moonbitlang/core/ref",
   "ZSY2221/json_repair" @repair,
 }
 

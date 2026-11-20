@@ -96,3 +96,43 @@ Thanks for your patience',
     }),
   },
 ];
+
+const labFixtures = [
+  {
+    label: "Precision & coercion",
+    modes: { json5: true, coerce: true },
+    input: [
+      '{',
+      '  "tool": "record_payment",',
+      '  "args": {',
+      '    "request_id": 0x20000000000001,',
+      '    "amount": "42.5",',
+      '    "approved": "true",',
+      '    "tags": "invoice",',
+      '    "currency": "USD',
+    ].join("\n"),
+    schema: toolSchema("record_payment", {
+      request_id: { type: "integer" },
+      amount: { type: "number", minimum: 0 },
+      approved: { type: "boolean" },
+      tags: { type: "array", items: { type: "string" } },
+      currency: { enum: ["USD", "EUR", "CNY"] },
+    }),
+  },
+  {
+    label: "Multiple calls",
+    modes: { extract: true },
+    input: [
+      "First, search the project docs:",
+      "```json",
+      '{"tool":"search_docs","args":{"query":"MoonBit"}}',
+      "```",
+      "",
+      "Next, get the balance:",
+      '{"tool":"get_balance","args":{"account":9007199254740993}}',
+      "",
+      "Then send a notice:",
+      '{"tool":"send_notice","args":{"message":"Ready',
+    ].join("\n"),
+  },
+];
