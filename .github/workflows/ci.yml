@@ -30,6 +30,10 @@ jobs:
       - run: moon test --target "$TARGET" --deny-warn
         env:
           TARGET: ${{ matrix.backend }}
+      - name: Compile README API examples as a separate consumer
+        run: node tools/verify-readme.mjs "$GITHUB_WORKSPACE" "$TARGET"
+        env:
+          TARGET: ${{ matrix.backend }}
       - run: moon doc
         if: matrix.backend == 'wasm-gc'
       - run: node web/build.mjs

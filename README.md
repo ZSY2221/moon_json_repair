@@ -1,10 +1,37 @@
 # moon_json_repair
 
+![演练台修复截断的工具调用 / Playground repairing a truncated tool call](https://raw.githubusercontent.com/ZSY2221/moon_json_repair/main/web/screenshot.png)
+
 纯 MoonBit 的 LLM 工具调用 JSON 修复与校验引擎。流式响应可以在任意位置截断，模型也可能混入 Markdown、注释或 Python 字面量。引擎把当前输入修复成严格 JSON，返回原文位置可核对的审计记录，再按工具参数 Schema 校验。
 
 A pure MoonBit engine for repairing and validating LLM tool-call JSON. Use it when a streaming response stops mid-value, or the model mixes JSON with Markdown, comments, or Python literals. Each repair returns strict JSON, its AST, and source-located edits. A separate validation step checks the tool arguments.
 
-[快速开始 / Quick start](#快速开始--quick-start) · [CLI](#cli) · [演练台 / Playground](#演练台--playground) · [基准 / Benchmarks](#基准--benchmarks) · [发布清单 / Release checklist](docs/PUBLISH_CHECKLIST.md)
+[在线演练台 / Live demo](https://zsy2221.github.io/moon_json_repair/) · [快速开始 / Quick start](#快速开始--quick-start) · [CLI](#cli) · [基准 / Benchmarks](#基准--benchmarks) · [发布清单 / Release checklist](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md)
+
+## 六类样本实测 / Six-case comparison
+
+| 样本或指标 / Sample or metric | MoonBit 严格 JSON 解析 / Strict parser | moon_json_repair |
+| --- | ---: | ---: |
+| 流式截断 / Stream cut | 拒绝 · 0.86 µs | 恢复 · 4.88 µs |
+| Markdown 与解释文字 / Markdown and prose | 拒绝 · 0.49 µs | 恢复 · 5.66 µs |
+| Python、JS 字面量 / Python and JS literals | 拒绝 · 0.83 µs | 恢复 · 5.73 µs |
+| 注释与尾逗号 / Comments and trailing comma | 拒绝 · 0.95 µs | 恢复 · 5.61 µs |
+| 裸键、单引号、缺逗号 / Keys, quotes, and commas | 拒绝 · 0.50 µs | 恢复 · 5.19 µs |
+| 语法和参数均有问题 / Syntax and schema errors | 拒绝 · 1.66 µs | 恢复语法 · 5.90 µs |
+| **六例语法恢复率 / Syntactic recovery** | **0/6** | **6/6** |
+| JS release 探针 / Probe · raw / gzip −9 | 259,490 / 44,004 B | 338,095 / 53,267 B |
+| Wasm GC release 探针 / Probe · raw / gzip −9 | 73,052 / 38,325 B | 81,187 / 39,867 B |
+| Native x86-64 release 探针 / Probe · raw / gzip −9 | 561,816 / 242,159 B | 587,032 / 252,179 B |
+| 第三方模块 / External modules · 项目 FFI / Project FFI | 0 · 0 | 0 · 0 |
+| 项目测试与核心覆盖 / Project tests and library coverage | — | 160/160 × 3 · 92.8% (852/918) |
+
+恢复率只统计演练台这六个已知畸形样本。最后一个样本恢复了 JSON 语法，Schema 仍准确拒绝三个字段。JS 延迟使用同一工具链，在 Windows、Ryzen 9 8945HX、Node.js 24.20.0 上预热后取 9 批各 10,000 次的中位单次耗时。计时含解析及错误处理，不含 Schema 和页面渲染。体积是同一有效输入、输出 JSON 的最小 release 探针，含各后端运行时。Native 数据来自 Ubuntu 22.04 WSL，三组均不含演练台和 CLI。
+
+The recovery rate is for these six malformed fixtures. The final fixture repairs the syntax and still fails three schema constraints. JS timings are median time per operation over nine warmed batches of 10,000, excluding schema validation and rendering. Sizes are release probes that process the same valid input, including each runtime. Native is Linux x86-64 under WSL. The probes omit the playground and CLI.
+
+```sh
+node tools/release-bench.mjs --native-wsl Ubuntu-22.04
+```
 
 ## 能力 / Features
 
@@ -26,12 +53,14 @@ The project was verified with MoonBit 0.1.20261119. After installing the [offici
 moon add ZSY2221/json_repair
 ```
 
-在调用包的 `moon.pkg` 中添加导入。 Add this import to the consuming package.
+在消费方的 `moon.pkg` 添加测试导入，再把下面两个示例粘贴到 `readme_test.mbt` 中，运行 `moon test --deny-warn`。在普通 `.mbt` 源文件中调用时，使用常规导入块。
+
+Add the test import to the consumer's `moon.pkg`, paste both examples into `readme_test.mbt`, and run `moon test --deny-warn`. For production `.mbt` files, use a regular import block.
 
 ```moonbit
 import {
   "ZSY2221/json_repair" @json_repair,
-}
+} for "test"
 ```
 
 以下示例修复截断的工具调用，再校验金额和货币。 This example repairs a truncated tool call and checks its amount and currency.
@@ -145,15 +174,13 @@ Stdout is one JSON report with `json`, `value`, `edits`, and `schema`. With a sc
 
 ## 演练台 / Playground
 
-打开 [web/index.html](web/index.html) 即可离线使用。内置六例，支持实时修复、前缀回放、审计点击定位和可编辑 Schema。浏览器只加载本地文件。
+从源码仓库打开 `web/index.html` 即可离线使用。内置六例，支持实时修复、前缀回放、审计点击定位和可编辑 Schema。浏览器只加载本地文件。[源码仓库](https://github.com/ZSY2221/moon_json_repair)
 
-Open [web/index.html](web/index.html) directly in a browser. Six examples demonstrate live repair, prefix playback, audit-to-source navigation, and editable schemas. The browser needs only the checked-in local assets.
+Open `web/index.html` directly from a repository checkout. Six examples demonstrate live repair, prefix playback, audit-to-source navigation, and editable schemas. The browser needs only the checked-in static assets.
 
-![演练台在浏览器中运行 / Playground repairing a truncated tool call](web/screenshot.png)
+`web/engine.js` 由 `cmd/playground` 通过 MoonBit JS 后端编译。以下脚本将编译产物复制到离线页面。[GitHub Pages 发布清单](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)
 
-`web/engine.js` 由 `cmd/playground` 通过 MoonBit JS 后端编译。以下脚本将编译产物复制到离线页面。发布到 GitHub Pages 的步骤见[发布清单](docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)。
-
-`web/engine.js` is generated from `cmd/playground` using the MoonBit JS backend. Rebuild it with the following command. GitHub Pages deployment is covered in the [release checklist](docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages).
+`web/engine.js` is generated from `cmd/playground` using the MoonBit JS backend. Rebuild it with the following command. [GitHub Pages deployment checklist](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)
 
 ```sh
 node web/build.mjs
@@ -168,6 +195,7 @@ moon test
 moon test --target js
 moon test --target native
 moon doc
+node tools/verify-readme.mjs
 ```
 
 三后端各通过 160 项测试。Wasm GC 构建的核心包覆盖率为 852/918 个插桩点（92.8%）。
@@ -190,4 +218,4 @@ Windows, AMD Ryzen 9 8945HX, Node.js 24.20.0, MoonBit 0.1.20261119 JS release bu
 moon bench --target js --release --no-parallelize
 ```
 
-[变更记录 / Changelog](docs/CHANGELOG.md) · [Apache-2.0](LICENSE)
+[变更记录 / Changelog](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/CHANGELOG.md) · [Apache-2.0](LICENSE)

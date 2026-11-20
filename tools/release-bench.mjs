@@ -1,0 +1,208 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { cpus, homedir, platform, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
+import { gzipSync } from "node:zlib";
+
+const repository = fileURLToPath(new URL("../", import.meta.url));
+const [flag, distribution, ...extra] = process.argv.slice(2);
+if (extra.length || (flag && (flag !== "--native-wsl" || !distribution || platform() !== "win32"))) {
+  throw new Error("Usage: node tools/release-bench.mjs [--native-wsl DISTRO]");
+}
+const tempRoot = realpathSync(tmpdir());
+const prefix = "moon-json-repair-bench-";
+const workspace = mkdtempSync(join(tempRoot, prefix));
+
+const strict = [
+  "fn strict_json(source : String) -> String {",
+  "  try {",
+  "    @json.parse(source[:], preserve_number_repr=true, reject_duplicate_keys=true).stringify()",
+  "  } catch {",
+  '    _ => ""',
+  "  }",
+  "}",
+].join("\n");
+const repair = [
+  "fn repaired_json(source : String) -> String {",
+  "  match @repair.repair(source) {",
+  "    Ok(report) => report.json",
+  '    Err(_) => ""',
+  "  }",
+  "}",
+].join("\n");
+
+function executableSource(helper, conversion) {
+  return [
+    "///|",
+    helper,
+    "",
+    "///|",
+    "fn main {",
+    '  let source = #|{"tool":"echo","args":{"text":"moon","limit":3}}',
+    "  println(" + conversion + "(source))",
+    "}",
+  ].join("\n");
+}
+
+function makePackage(module, name, source, foreign = false, needsRepair = false) {
+  const directory = join(workspace, name);
+  mkdirSync(directory);
+  const imports = [
+    ...(source.includes("@json.") ? ['  "moonbitlang/core/json",'] : []),
+    ...(needsRepair ? ['  "' + module + '" @repair,'] : []),
+  ];
+  const kind = foreign ? 'pkgtype(kind: "foreign_library")\noptions(link: { "js": { "format": "cjs" } })'
+    : 'pkgtype(kind: "executable")';
+  writeFileSync(join(directory, "moon.pkg"), "import {\n" + imports.join("\n") + "\n}\n\n" + kind + "\n");
+  writeFileSync(join(directory, "probe.mbt"), source + "\n");
+}
+
+function runMoon(args, wsl = false) {
+  const options = { cwd: workspace, encoding: "utf8", env: { ...process.env, WSL_UTF8: "1" } };
+  let run = wsl
+    ? spawnSync("wsl.exe", ["-d", distribution, "-e", "bash", "-lc",
+      'export PATH="$HOME/.moon/bin:$PATH"; exec moon "$@"', "moon", ...args], options)
+    : spawnSync("moon", args, options);
+  if (!wsl && run.error?.code === "ENOENT") {
+    const moon = platform() === "win32" ? "moon.exe" : "moon";
+    run = spawnSync(join(homedir(), ".moon", "bin", moon), args, options);
+  }
+  if (run.error || run.status !== 0) {
+    throw run.error ?? new Error("moon " + args.join(" ") + "\n" + run.stdout + run.stderr);
+  }
+  return run.stdout;
+}
+
+function compile(name, target) {
+  const wsl = target === "native" && Boolean(distribution);
+  const output = runMoon(["build", name, "--target", target, "--release", "--strip", "--deny-warn", "--output-json"], wsl);
+  const metadata = output.split(/\r?\n/).filter(line => line.startsWith("{")).map(line => JSON.parse(line))
+    .find(message => message.$message_type === "artifact" && message.target_backend === target
+      && message.package.endsWith("/" + name));
+  assert.ok(metadata, "Compiler did not report " + name + " " + target + " output");
+  if (!wsl) return metadata.path;
+  const suffix = metadata.path.match(/\/_build\/(.+)$/)?.[1];
+  assert.ok(suffix, "Unexpected WSL build artifact path " + metadata.path);
+  return join(workspace, "_build", ...suffix.split("/"));
+}
+
+function median(values) {
+  const sorted = values.toSorted((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function timeBatch(convert, input, count) {
+  let length = 0;
+  const start = performance.now();
+  for (let iteration = 0; iteration < count; iteration++) {
+    length += convert(input).length;
+  }
+  const duration = (performance.now() - start) * 1000 / count;
+  assert.ok(Number.isInteger(length));
+  return duration;
+}
+
+function measureFixtures({ moonStrictRelease: strictJson, moonRepairRelease: repairedJson }) {
+  const catalog = readFileSync(join(repository, "web", "examples.js"), "utf8");
+  const examples = runInNewContext(catalog + "\nexamples");
+  const expected = [
+    { tool: "create_ticket", args: { priority: "high", retries: 2, title: "Investigate checkout timeout" } },
+    { tool: "search_docs", args: { query: "MoonBit JSON repair", limit: 3 } },
+    { tool: "set_preferences", args: { daily_email: true, sms: false, timezone: null, backup: null } },
+    { tool: "fetch_url", args: { url: "https://example.com/help", retries: 2 } },
+    { tool: "send_notice", args: { channel: "ops", body: "Checkout is back online\nThanks for your patience" } },
+    { tool: "record_payment", args: { amount: -12.5, currency: "BTC", tags: ["invoice", 42] } },
+  ];
+  assert.equal(examples.length, expected.length);
+  assert.equal(typeof strictJson, "function");
+  assert.equal(typeof repairedJson, "function");
+  const rows = [];
+  for (const [index, { input, label }] of examples.entries()) {
+    const strictOutput = strictJson(input);
+    const repairedOutput = repairedJson(input);
+    assert.equal(strictOutput, "", label + " should be rejected by the strict parser");
+    assert.deepEqual(JSON.parse(repairedOutput), expected[index], label + " repaired incorrectly");
+    assert.deepEqual(JSON.parse(strictJson(repairedOutput)), expected[index], label + " is not strict JSON");
+    timeBatch(strictJson, input, 10_000);
+    timeBatch(repairedJson, input, 10_000);
+    const strictTimes = [];
+    const repairTimes = [];
+    for (let sample = 0; sample < 9; sample++) {
+      if (sample % 2 === 0) {
+        strictTimes.push(timeBatch(strictJson, input, 10_000));
+        repairTimes.push(timeBatch(repairedJson, input, 10_000));
+      } else {
+        repairTimes.push(timeBatch(repairedJson, input, 10_000));
+        strictTimes.push(timeBatch(strictJson, input, 10_000));
+      }
+    }
+    rows.push({
+      label,
+      strict: "rejected",
+      repaired: "expected JSON",
+      strictUs: Number(median(strictTimes).toFixed(2)),
+      repairUs: Number(median(repairTimes).toFixed(2)),
+    });
+  }
+  return rows;
+}
+
+function fileSizes(path) {
+  const content = readFileSync(path);
+  return { raw: content.byteLength, gzip: gzipSync(content, { level: 9 }).byteLength };
+}
+
+try {
+  const manifest = readFileSync(join(repository, "moon.mod"), "utf8");
+  const module = manifest.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
+  assert.ok(module, "Could not find the MoonBit module name");
+  const mod = 'name = "' + module + '"\nversion = "0.1.0"\npreferred_target = "wasm-gc"\n';
+  writeFileSync(join(workspace, "moon.mod"), mod);
+  writeFileSync(join(workspace, "moon.pkg"), 'import { "moonbitlang/core/json" }\n');
+  for (const entry of readdirSync(repository, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".mbt") && !/_(?:test|wbtest)\.mbt$/.test(entry.name)) {
+      copyFileSync(join(repository, entry.name), join(workspace, entry.name));
+    }
+  }
+  const bridge = [
+    "///|",
+    strict,
+    "",
+    "///|",
+    repair,
+    "",
+    "///|",
+    '#export_name("moonStrictRelease")',
+    "pub fn strict_entry(source : String) -> String { strict_json(source) }",
+    "",
+    "///|",
+    '#export_name("moonRepairRelease")',
+    "pub fn repair_entry(source : String) -> String { repaired_json(source) }",
+  ].join("\n");
+  makePackage(module, "timing", bridge, true, true);
+  makePackage(module, "strict_probe", executableSource(strict, "strict_json"));
+  makePackage(module, "repair_probe", executableSource(repair, "repaired_json"), false, true);
+
+  console.log(JSON.stringify({
+    moon: runMoon(["version"]).trim(),
+    node: process.version,
+    cpu: cpus()[0]?.model.trim(),
+    host: platform(),
+  }));
+  const require = createRequire(import.meta.url);
+  console.table(measureFixtures(require(compile("timing", "js"))));
+  for (const target of ["js", "wasm-gc", "native"]) {
+    const strictSize = fileSizes(compile("strict_probe", target));
+    const repairSize = fileSizes(compile("repair_probe", target));
+    console.log(JSON.stringify({ target, strict: strictSize, repair: repairSize }));
+  }
+} finally {
+  const target = realpathSync(workspace);
+  assert.ok(dirname(target) === tempRoot && basename(target).startsWith(prefix), "Unexpected benchmark scratch directory");
+  rmSync(target, { recursive: true, force: true });
+}

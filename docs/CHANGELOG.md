@@ -7,6 +7,7 @@
 - 支持工具调用参数的 Schema 子集 / Schema subset for tool-call arguments.
 - 跨后端边界测试、快照测试与幂等性测试 / Cross-backend boundary, snapshot, and idempotency tests.
 - 文件与标准输入 CLI、浏览器演练台和双语文档 / File and stdin CLI, browser playground, and bilingual documentation.
+- 发布包白名单、子路径资源预检、独立消费者示例和六类样本基准 / Release allowlist, Pages asset checks, independent consumer tests, and six-case benchmarks.
 
 ## 开发里程碑 / Development milestones
 

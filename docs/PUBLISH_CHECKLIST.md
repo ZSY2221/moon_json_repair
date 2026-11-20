@@ -15,11 +15,12 @@
   moon test --target wasm-gc
   moon test --target native
   moon doc
+  node tools/verify-readme.mjs
   node web/build.mjs
   moon package --list
   ```
 
-- [ ] 核对 `README.md` 的 API、CLI 与 Demo 步骤能从干净检出运行。打开 `web/index.html`，试跑六个案例，检查修复结果、位置日志和 Schema 通过或失败状态。
+- [ ] 核对 `README.md` 的 API、CLI 与 Demo 步骤能从干净检出运行。打开 `web/index.html`，试跑六个案例，检查修复结果、位置日志和 Schema 通过或失败状态。发包清单依照 `.moonignore` 核对，保留库、测试、CLI、演练台桥接源码、README 和许可证。
 - [ ] 核对 `git status --short`、`git log --oneline` 和 `git remote -v`。将可复现的验证结果和实际开发记录留在公开仓库。
 
 ## 2. 推送 GitHub 并部署 Pages
@@ -31,7 +32,7 @@
    git push -u origin main
    ```
 
-2. 打开仓库 **Settings → Pages → Build and deployment**，将 **Source** 设为 **GitHub Actions**。运行仓库的 Pages 工作流，或通过后续真实提交触发。工作流将 `web/` 上传为站点，`web/index.html` 是首页。部署完成后，从 **Settings → Pages** 打开实际站点地址。 [GitHub Pages 发布配置](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+2. 打开仓库 **Settings → Pages → Build and deployment**，将 **Source** 设为 **GitHub Actions**。在 **Actions → Deploy playground** 选择 `main` 并手动运行。工作流将 `web/` 上传为站点，`web/index.html` 是首页。部署完成后，从 **Settings → Pages** 打开实际站点地址。 [GitHub Pages 发布配置](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 3. 用浏览器无痕窗口打开预期地址 `https://zsy2221.github.io/moon_json_repair/`，验证访问权限、静态资源加载和示例交互。将实际确认可访问的 URL 填入 README 或验收材料。
 
 ## 3. 发布到 Mooncakes
@@ -77,7 +78,7 @@
 
    [参赛诚信承诺书](https://bxup9uklfcb.feishu.cn/wiki/GKDswxuptiJRcxkzPgZcw1J6nAd) · [学信网](https://www.chsi.com.cn/)
 
-2. **由参赛者亲自撰写项目申报书。** 表单要求一页内 Markdown，并明确要求本人写作。核对八项材料：项目名称、简介、方向及通用性、至少三个完整的预期使用场景、核心功能、原创或参考情况、移植项目的来源与许可证，以及公开 GitHub 仓库链接。此仓库链接需呈现至少 **10 个有效 commits**，每次提交应对应真实开发工作。仓库的五阶段里程碑与表单的有效提交数分别核对。 [官方申报表](https://bxup9uklfcb.feishu.cn/share/base/form/shrcnWUMlgpbwHaXgzV7HmNhNhg) · [申报书样本](https://bxup9uklfcb.feishu.cn/wiki/Rm3PwCxC7iEwJtkK1xMcYHZkn36)
+2. **由参赛者亲自撰写项目申报书。** 表单要求一页内 Markdown，并注明「不要使用 AI 编写」。核对项目名称、简介、方向及通用性、至少三个完整的预期使用场景、核心功能、原创或参考情况、移植项目的来源与许可证，以及公开 GitHub 仓库链接。此仓库链接需呈现至少 **10 个有效 commits**，每次提交应对应真实开发工作。 [官方申报表](https://bxup9uklfcb.feishu.cn/share/base/form/shrcnWUMlgpbwHaXgzV7HmNhNhg) · [申报书样本](https://bxup9uklfcb.feishu.cn/wiki/Rm3PwCxC7iEwJtkK1xMcYHZkn36)
 3. 提交并保存回执，通过提交完成页进入赛事交流群。查阅群内的报名审核、当前验收截止时间和验收入口。如主办方要求修改，按对方给出的方式更新。正式报名时间以审核通过前最后一次有效提交或修改为准。 [赛事流程](https://moonbitlang.github.io/Hackathon2026/#process)
 
 ## 5. 月度验收与季度评选
