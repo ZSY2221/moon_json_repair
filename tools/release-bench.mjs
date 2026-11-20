@@ -62,8 +62,8 @@ function makePackage(module, name, source, foreign = false, needsRepair = false)
   writeFileSync(join(directory, "probe.mbt"), source + "\n");
 }
 
-function runMoon(args, wsl = false) {
-  const options = { cwd: workspace, encoding: "utf8", env: { ...process.env, WSL_UTF8: "1" } };
+function runMoon(args, wsl = false, cwd = workspace) {
+  const options = { cwd, encoding: "utf8", env: { ...process.env, WSL_UTF8: "1" } };
   let run = wsl
     ? spawnSync("wsl.exe", ["-d", distribution, "-e", "bash", "-lc",
       'export PATH="$HOME/.moon/bin:$PATH"; exec moon "$@"', "moon", ...args], options)
@@ -109,7 +109,13 @@ function timeBatch(convert, input, count) {
 
 function measureFixtures({ moonStrictRelease: strictJson, moonRepairRelease: repairedJson }) {
   const catalog = readFileSync(join(repository, "web", "examples.js"), "utf8");
-  const examples = runInNewContext(catalog + "\nexamples");
+  const allExamples = runInNewContext(catalog + "\nexamples");
+  const fixtureLabels = ["Stream cut", "Markdown & prose", "Python & JS literals", "Comments", "Keys & commas", "Schema rejection"];
+  const examples = fixtureLabels.map(label => {
+    const fixture = allExamples.find(example => example.label === label);
+    assert.ok(fixture, "Missing strict comparison fixture " + label);
+    return fixture;
+  });
   const expected = [
     { tool: "create_ticket", args: { priority: "high", retries: 2, title: "Investigate checkout timeout" } },
     { tool: "search_docs", args: { query: "MoonBit JSON repair", limit: 3 } },
@@ -157,6 +163,31 @@ function fileSizes(path) {
   return { raw: content.byteLength, gzip: gzipSync(content, { level: 9 }).byteLength };
 }
 
+function measureScaling(moduleName, target) {
+  const output = runMoon([
+    "bench", "--target", target, "--release", "--no-parallelize", "--deny-warn",
+    "--package", moduleName, "--file", "scaling_bench_test.mbt",
+  ], target === "native" && Boolean(distribution), repository);
+  const factors = { ns: 0.001, "µs": 1, "μs": 1, us: 1, ms: 1000, s: 1_000_000 };
+  const means = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const row = line.match(/^(scale-\d+|stream-(?:preview|final)-\d+)\s+([\d.]+)\s+(ns|[µμu]s|ms|s)\s+±/);
+    if (row) means.set(row[1], Number(row[2]) * factors[row[3]]);
+  }
+  assert.equal(means.size, 10, "Unexpected MoonBit benchmark output:\n" + output);
+  for (const bytes of [200, 2_000, 20_000, 100_000]) {
+    const meanUs = means.get("scale-" + bytes);
+    console.log(JSON.stringify({ target, bytes, meanUs, mbPerSecond: Number((bytes / meanUs).toFixed(2)) }));
+  }
+  for (const chunk of [16, 64, 256]) {
+    const previewUs = means.get("stream-preview-" + chunk);
+    const finalizeUs = means.get("stream-final-" + chunk);
+    console.log(JSON.stringify({
+      target, chunk, previewUs, finalizeUs, finalOnlySpeedup: Number((previewUs / finalizeUs).toFixed(2)),
+    }));
+  }
+}
+
 try {
   const manifest = readFileSync(join(repository, "moon.mod"), "utf8");
   const module = manifest.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
@@ -200,6 +231,7 @@ try {
     const strictSize = fileSizes(compile("strict_probe", target));
     const repairSize = fileSizes(compile("repair_probe", target));
     console.log(JSON.stringify({ target, strict: strictSize, repair: repairSize }));
+    measureScaling(module, target);
   }
 } finally {
   const target = realpathSync(workspace);
