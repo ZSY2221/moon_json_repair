@@ -2,11 +2,6 @@ name: Deploy playground
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'web/**'
-      - '.github/workflows/pages.yml'
 
 permissions:
   contents: read
@@ -18,9 +13,17 @@ concurrency:
 jobs:
   site:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
     steps:
       - uses: actions/checkout@v6
       - uses: actions/configure-pages@v5
+      - name: Verify playground assets
+        run: |
+          for asset in index.html style.css engine.js examples.js app.js; do
+            test -s "web/$asset"
+          done
       - name: Package static playground
         uses: actions/upload-pages-artifact@v4
         with:

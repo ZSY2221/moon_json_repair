@@ -1,6 +1,11 @@
 .DS_Store
+Thumbs.db
 _build/
 target/
 target
 .mooncakes/
 .moonagent/
+node_modules/
+playwright-report/
+test-results/
+/deliverables/moonbit-nov-2026/
