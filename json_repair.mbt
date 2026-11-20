@@ -69,9 +69,21 @@ pub(all) struct RepairEdit {
 }
 
 ///|
+/// More specific serialized identity for optional repairs. The original
+/// RepairKind remains exhaustive for source-compatible consumers.
+pub fn RepairEdit::code(self : RepairEdit) -> String {
+  match (self.kind, self.action) {
+    (NormalizeLiteral, "convert hexadecimal integer to decimal") =>
+      "hex_int_to_decimal"
+    (NormalizeLiteral, "normalize JSON5 decimal number") => "normalize_decimal"
+    _ => self.kind.code()
+  }
+}
+
+///|
 pub impl ToJson for RepairEdit with fn to_json(self) {
   {
-    "kind": self.kind.code(),
+    "kind": self.code(),
     "action": self.action,
     "position": @json.to_json(self.position),
     "end_offset": self.end_offset,
@@ -151,4 +163,19 @@ pub(all) struct RepairLimits {
 ///|
 pub fn RepairLimits::default() -> RepairLimits {
   { max_input: 1_048_576, max_depth: 128, max_edits: 16_384, }
+}
+
+///|
+/// Extra repair behavior is explicitly enabled. Extraction considers at most
+/// max_blocks successful candidates, clamped to the inclusive range 0–4096.
+#derive(Eq, Debug)
+pub(all) struct RepairOptions {
+  limits : RepairLimits
+  json5 : Bool
+  max_blocks : Int32
+}
+
+///|
+pub fn RepairOptions::default() -> RepairOptions {
+  { limits: RepairLimits::default(), json5: false, max_blocks: 128, }
 }

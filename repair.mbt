@@ -6,7 +6,12 @@ priv struct FenceLine {
 
 ///|
 // A fence marker occupies a line and is optionally labeled json.
-fn find_fence(input : StringView, start : Int32, closing : Bool) -> FenceLine? {
+fn find_fence(
+  input : StringView,
+  start : Int32,
+  closing : Bool,
+  json5~ : Bool = false,
+) -> FenceLine? {
   let mut line = start
   while line < input.length() {
     let mut end = line
@@ -24,7 +29,13 @@ fn find_fence(input : StringView, start : Int32, closing : Bool) -> FenceLine? {
     }
     let marker = input.exact_view(start=line, end~).trim(chars=" \t")
     if marker == "```" ||
-      (!closing && marker.equal_ignore_ascii_case("```json")) {
+      (
+        !closing &&
+        (
+          marker.equal_ignore_ascii_case("```json") ||
+          (json5 && marker.equal_ignore_ascii_case("```json5"))
+        )
+      ) {
       return Some({ start: line, after, })
     }
     line = after
@@ -108,7 +119,11 @@ fn looks_like_object(input : StringView, start : Int32) -> Bool {
 }
 
 ///|
-fn find_container(input : StringView, start : Int32) -> Int32? {
+fn find_container(
+  input : StringView,
+  start : Int32,
+  json5~ : Bool = false,
+) -> Int32? {
   // The same end of a whitespace run can be used for consecutive candidates.
   let mut next = start
   for i in start..<input.length() {
@@ -130,6 +145,7 @@ fn find_container(input : StringView, start : Int32) -> Int32? {
         (
           eof ||
           first is (']' | '{' | '[' | '"' | '\'' | '-' | '/') ||
+          (json5 && first is ('.' | '+')) ||
           first.is_ascii_digit() ||
           starts_literal(input, next)
         )
@@ -161,6 +177,7 @@ fn Cursor::read_value(
     }
     '"' | '\'' => self.read_string(out)
     '0'..<='9' | '-' => self.read_number(out)
+    '+' | '.' if self.json5 => self.read_number(out)
     c =>
       if is_identifier_start(c) {
         self.read_literal(out)
@@ -250,7 +267,10 @@ fn Cursor::read_array(
   if !self.at_end() && self.peek() != ']' {
     while true {
       self.read_value(out, depth)
-      match self.separator(']', value_starts) {
+      match
+        self.separator(']', c => {
+          value_starts(c) || (self.json5 && c is ('.' | '+'))
+        }) {
         EndContainer => break
         ExplicitComma(_) => ()
         MissingComma =>
@@ -368,8 +388,9 @@ fn Cursor::finish_prose(self : Cursor, allow : Bool) -> Unit raise RepairFault {
     !(c.is_ascii_alphabetic() ||
     c.to_int() > 127 ||
     c is ('.' | '!' | ';' | '*' | '(')) ||
-    find_container(remaining, at.offset) is Some(_) ||
-    find_fence(remaining, at.offset, false) is Some(_) {
+    (self.json5 && c is ('.' | '+') && self.peek(ahead=1).is_ascii_digit()) ||
+    find_container(remaining, at.offset, json5=self.json5) is Some(_) ||
+    find_fence(remaining, at.offset, false, json5=self.json5) is Some(_) {
     self.reject(
       TrailingContent,
       "ambiguous or unexpected content after the JSON value",
@@ -394,11 +415,12 @@ fn Cursor::read_document(self : Cursor) -> String raise RepairFault {
   let start = self.position
   let first = self.peek()
   let is_root = first is ('{' | '[' | '"' | '\'' | '-') ||
+    (self.json5 && first is ('.' | '+') && self.peek(ahead=1).is_ascii_digit()) ||
     (first.is_ascii_digit() && !numbered_preamble(self.input, start.offset)) ||
     starts_literal(self.input, start.offset)
   let mut closing : FenceLine? = None
   if !is_root {
-    match find_fence(self.input, start.offset, false) {
+    match find_fence(self.input, start.offset, false, json5=self.json5) {
       Some(open) => {
         self.advance(open.start)
         if start.offset != open.start {
@@ -414,7 +436,7 @@ fn Cursor::read_document(self : Cursor) -> String raise RepairFault {
         self.skip_trivia()
       }
       None =>
-        match find_container(self.input, start.offset) {
+        match find_container(self.input, start.offset, json5=self.json5) {
           Some(at) => {
             self.advance(at)
             self.edit(StripProse, "remove text before JSON", start)
@@ -498,23 +520,54 @@ pub fn repair(
   input : String,
   limits~ : RepairLimits = RepairLimits::default(),
 ) -> Result[RepairReport, RepairError] {
+  repair_input(input, limits, false)
+}
+
+///|
+/// Repair one document, with extensions enabled only when explicitly requested.
+pub fn repair_with_options(
+  input : String,
+  options : RepairOptions,
+) -> Result[RepairReport, RepairError] {
+  repair_input(input, options.limits, options.json5)
+}
+
+///|
+fn repair_input(
+  input : String,
+  limits : RepairLimits,
+  json5 : Bool,
+) -> Result[RepairReport, RepairError] {
   let limits = limits.normalized()
-  let cursor = Cursor::new(input[:], limits)
-  if input.length() > limits.max_input {
-    return Err(input_limit_error(cursor.position))
+  let cursor = Cursor::new(input[:], limits, json5~)
+  if cursor.invalid_input(input) is Some(error) {
+    return Err(error)
+  }
+  cursor.report()
+}
+
+///|
+fn Cursor::invalid_input(cursor : Cursor, input : String) -> RepairError? {
+  if input.length() > cursor.limits.max_input {
+    return Some(input_limit_error(cursor.position))
   }
   if invalid_utf16_at(input) is Some(offset) {
     cursor.advance(offset)
-    return Err({
+    return Some({
       kind: InvalidUnicode,
       message: "expected well-formed UTF-16 input",
       position: cursor.position,
     })
   }
+  None
+}
+
+///|
+fn Cursor::report(cursor : Cursor) -> Result[RepairReport, RepairError] {
   let json = cursor.read_document() catch { Fault(error) => return Err(error) }
   let value = @json.parse(
     json[:],
-    max_nesting_depth=limits.max_depth + 1,
+    max_nesting_depth=cursor.limits.max_depth + 1,
     reject_duplicate_keys=true,
     preserve_number_repr=true,
   ) catch {

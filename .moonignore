@@ -9,12 +9,20 @@
 !/json_repair.mbt
 !/lexer.mbt
 !/repair.mbt
+!/framing.mbt
+!/extraction.mbt
 !/schema.mbt
+!/coercion.mbt
 !/stream.mbt
 !/json_repair_test.mbt
 !/repair_audit_test.mbt
 !/repair_bench_test.mbt
 !/schema_test.mbt
+!/coercion_test.mbt
+!/core_extension_test.mbt
+!/fuzz_test.mbt
+!/legacy_coverage_test.mbt
+!/scaling_bench_test.mbt
 
 !/cmd/
 /cmd/*

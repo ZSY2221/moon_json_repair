@@ -11,10 +11,15 @@ priv struct Cursor {
   mut after_cr : Bool
   edits : Array[RepairEdit]
   limits : RepairLimits
+  json5 : Bool
 }
 
 ///|
-fn Cursor::new(input : StringView, limits : RepairLimits) -> Cursor {
+fn Cursor::new(
+  input : StringView,
+  limits : RepairLimits,
+  json5~ : Bool = false,
+) -> Cursor {
   {
     input,
     limit: input.length(),
@@ -22,6 +27,7 @@ fn Cursor::new(input : StringView, limits : RepairLimits) -> Cursor {
     after_cr: false,
     edits: [],
     limits,
+    json5,
   }
 }
 
@@ -355,31 +361,136 @@ fn Cursor::digits(self : Cursor) -> Unit {
 }
 
 ///|
+fn hex_digit(c : Char) -> Int32 {
+  match c {
+    '0'..<='9' => c.to_int() - '0'.to_int()
+    'a'..<='f' => c.to_int() - 'a'.to_int() + 10
+    'A'..<='F' => c.to_int() - 'A'.to_int() + 10
+    _ => -1
+  }
+}
+
+///|
+// Multiplication by 256 stays within Int32 for base 1,000,000 limbs.
+// At most 1,024 hex digits enter conversion, bounding its quadratic work.
+fn decimal_from_hex(digits : StringView, negative : Bool) -> String {
+  let limbs = [0]
+  let base = 1_000_000
+  let mut offset = 0
+  while offset < digits.length() {
+    let mut count = 2
+    if digits.length() - offset == 1 {
+      count = 1
+    }
+    let mut carry = 0
+    for i in offset..<(offset + count) {
+      carry = carry * 16 + hex_digit(char_at(digits, i))
+    }
+    let multiplier = if count == 2 { 256 } else { 16 }
+    for i in 0..<limbs.length() {
+      let value = limbs[i] * multiplier + carry
+      limbs[i] = value % base
+      carry = value / base
+    }
+    if carry != 0 {
+      limbs.push(carry)
+    }
+    offset += count
+  }
+  let out = StringBuilder()
+  if negative {
+    out.write_char('-')
+  }
+  let mut index = limbs.length() - 1
+  out.write_string(limbs[index].to_string())
+  while index > 0 {
+    index -= 1
+    let digits = limbs[index].to_string()
+    for _ in digits.length()..<6 {
+      out.write_char('0')
+    }
+    out.write_string(digits)
+  }
+  out.to_string()
+}
+
+///|
+fn invalid_number_suffix(c : Char) -> Bool {
+  is_identifier_start(c) || c is ('.' | '-' | '+')
+}
+
+///|
+fn Cursor::read_hex_number(
+  self : Cursor,
+  out : StringBuilder,
+  at : SourcePosition,
+  negative : Bool,
+) -> Unit raise RepairFault {
+  self.advance(self.position.offset + 2)
+  let start = self.position.offset
+  while hex_digit(self.peek()) >= 0 {
+    self.bump()
+    if self.position.offset - start > 1024 {
+      self.reject(InvalidNumber, "hexadecimal integer exceeds 1024 digits", at~)
+    }
+  }
+  if start == self.position.offset || invalid_number_suffix(self.peek()) {
+    self.reject(InvalidNumber, "invalid hexadecimal integer", at~)
+  }
+  let replacement = decimal_from_hex(
+    self.span(start, self.position.offset),
+    negative,
+  )
+  out.write_string(replacement)
+  self.edit(
+    NormalizeLiteral,
+    "convert hexadecimal integer to decimal",
+    at,
+    replacement~,
+  )
+}
+
+///|
 fn Cursor::read_number(
   self : Cursor,
   out : StringBuilder,
 ) -> Unit raise RepairFault {
   let at = self.position
-  if self.peek() == '-' {
+  let sign = self.peek()
+  if sign == '-' || (self.json5 && sign == '+') {
     self.bump()
   }
-  match self.peek() {
-    '0' => {
-      self.bump()
-      if self.peek().is_ascii_digit() {
-        self.reject(InvalidNumber, "leading zero in number", at~)
-      }
-    }
-    '1'..<='9' => self.digits()
-    _ => self.reject(InvalidNumber, "expected a digit", at~)
+  if self.json5 && self.peek() == '0' && self.peek(ahead=1) is ('x' | 'X') {
+    self.read_hex_number(out, at, sign == '-')
+    return
   }
+  let digits_start = self.position.offset
+  let leading_dot = self.json5 && self.peek() == '.'
+  if !leading_dot {
+    match self.peek() {
+      '0' => {
+        self.bump()
+        if self.peek().is_ascii_digit() {
+          self.reject(InvalidNumber, "leading zero in number", at~)
+        }
+      }
+      '1'..<='9' => self.digits()
+      _ => self.reject(InvalidNumber, "expected a digit", at~)
+    }
+  }
+  let mut trailing_dot = false
   if self.peek() == '.' {
     self.bump()
     if !self.peek().is_ascii_digit() {
-      self.reject(InvalidNumber, "expected a fractional digit", at~)
+      if !self.json5 || leading_dot {
+        self.reject(InvalidNumber, "expected a fractional digit", at~)
+      }
+      trailing_dot = true
+    } else {
+      self.digits()
     }
-    self.digits()
   }
+  let exponent_start = self.position.offset
   if self.peek() is ('e' | 'E') {
     self.bump()
     if self.peek() is ('+' | '-') {
@@ -390,10 +501,33 @@ fn Cursor::read_number(
     }
     self.digits()
   }
-  if is_identifier_start(self.peek()) || self.peek() is ('.' | '-' | '+') {
+  if invalid_number_suffix(self.peek()) {
     self.reject(InvalidNumber, "invalid character following number", at~)
   }
-  out.write_view(self.span(at.offset, self.position.offset))
+  if self.json5 && (sign == '+' || leading_dot || trailing_dot) {
+    let normalized = StringBuilder()
+    if sign == '-' {
+      normalized.write_char('-')
+    }
+    if leading_dot {
+      normalized.write_char('0')
+    }
+    normalized.write_view(self.span(digits_start, exponent_start))
+    if trailing_dot {
+      normalized.write_char('0')
+    }
+    normalized.write_view(self.span(exponent_start, self.position.offset))
+    let replacement = normalized.to_string()
+    out.write_string(replacement)
+    self.edit(
+      NormalizeLiteral,
+      "normalize JSON5 decimal number",
+      at,
+      replacement~,
+    )
+  } else {
+    out.write_view(self.span(at.offset, self.position.offset))
+  }
 }
 
 ///|
@@ -416,17 +550,7 @@ fn Cursor::read_literal(
     "None" | "undefined" => "null"
     _ => {
       if self.at_end() {
-        let completed = match word[0].to_int().unsafe_to_char() {
-          't' => complete_literal(word, "true", "true")
-          'f' => complete_literal(word, "false", "false")
-          'n' => complete_literal(word, "null", "null")
-          'T' => complete_literal(word, "True", "true")
-          'F' => complete_literal(word, "False", "false")
-          'N' => complete_literal(word, "None", "null")
-          'u' => complete_literal(word, "undefined", "null")
-          _ => None
-        }
-        if completed is Some(text) {
+        if literal_completion(word) is Some(text) {
           out.write_string(text)
           self.edit(
             CompleteLiteral,
@@ -443,6 +567,20 @@ fn Cursor::read_literal(
   }
   out.write_string(replacement)
   self.edit(NormalizeLiteral, "convert non-JSON literal", at, replacement~)
+}
+
+///|
+fn literal_completion(word : StringView) -> String? {
+  match char_at(word, 0) {
+    't' => complete_literal(word, "true", "true")
+    'f' => complete_literal(word, "false", "false")
+    'n' => complete_literal(word, "null", "null")
+    'T' => complete_literal(word, "True", "true")
+    'F' => complete_literal(word, "False", "false")
+    'N' => complete_literal(word, "None", "null")
+    'u' => complete_literal(word, "undefined", "null")
+    _ => None
+  }
 }
 
 ///|
