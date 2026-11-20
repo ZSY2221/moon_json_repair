@@ -1,0 +1,22 @@
+import {
+  "ZSY2221/json_repair" @repair,
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/io",
+  "moonbitlang/core/async/stdio",
+  "moonbitlang/core/buffer",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+  "moonbitlang/core/json",
+}
+
+pkgtype(kind: "executable")
+
+supported_targets = "native"
+
+options(
+  "allow-experimental-packages": [
+    "moonbitlang/core/async/fs",
+    "moonbitlang/core/async/io",
+    "moonbitlang/core/async/stdio",
+  ],
+)
