@@ -1,47 +1,26 @@
 # moon_json_repair
 
+[![CI](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml/badge.svg)](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4059ad)](LICENSE) ![Targets: Wasm GC, JS, Native](https://img.shields.io/badge/targets-Wasm%20GC%20%7C%20JS%20%7C%20Native-684dc2)
+
 ![演练台修复截断的工具调用 / Playground repairing a truncated tool call](https://raw.githubusercontent.com/ZSY2221/moon_json_repair/main/web/screenshot.png)
 
-纯 MoonBit 的 LLM 工具调用 JSON 修复与校验引擎。流式响应可以在任意位置截断，模型也可能混入 Markdown、注释或 Python 字面量。引擎把当前输入修复成严格 JSON，返回原文位置可核对的审计记录，再按工具参数 Schema 校验。
+按原始位置从混合回复提取独立工具调用。保留精确数字和可追踪修复日志。必要时按 Schema 自愈安全类型偏差，并为业务校验生成最短重试数据。
 
-A pure MoonBit engine for repairing and validating LLM tool-call JSON. Use it when a streaming response stops mid-value, or the model mixes JSON with Markdown, comments, or Python literals. Each repair returns strict JSON, its AST, and source-located edits. A separate validation step checks the tool arguments.
+Extract independent tool calls from mixed replies, preserving exact number text and audit coordinates. Opt into safe schema-guided type fixes and generate bounded retry instructions for remaining errors.
 
 [在线演练台 / Live demo](https://zsy2221.github.io/moon_json_repair/) · [快速开始 / Quick start](#快速开始--quick-start) · [CLI](#cli) · [基准 / Benchmarks](#基准--benchmarks) · [发布清单 / Release checklist](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md)
 
-## 六类样本实测 / Six-case comparison
+## 能力 / Capability matrix
 
-| 样本或指标 / Sample or metric | MoonBit 严格 JSON 解析 / Strict parser | moon_json_repair |
-| --- | ---: | ---: |
-| 流式截断 / Stream cut | 拒绝 · 0.86 µs | 恢复 · 4.88 µs |
-| Markdown 与解释文字 / Markdown and prose | 拒绝 · 0.49 µs | 恢复 · 5.66 µs |
-| Python、JS 字面量 / Python and JS literals | 拒绝 · 0.83 µs | 恢复 · 5.73 µs |
-| 注释与尾逗号 / Comments and trailing comma | 拒绝 · 0.95 µs | 恢复 · 5.61 µs |
-| 裸键、单引号、缺逗号 / Keys, quotes, and commas | 拒绝 · 0.50 µs | 恢复 · 5.19 µs |
-| 语法和参数均有问题 / Syntax and schema errors | 拒绝 · 1.66 µs | 恢复语法 · 5.90 µs |
-| **六例语法恢复率 / Syntactic recovery** | **0/6** | **6/6** |
-| JS release 探针 / Probe · raw / gzip −9 | 259,490 / 44,004 B | 338,095 / 53,267 B |
-| Wasm GC release 探针 / Probe · raw / gzip −9 | 73,052 / 38,325 B | 81,187 / 39,867 B |
-| Native x86-64 release 探针 / Probe · raw / gzip −9 | 561,816 / 242,159 B | 587,032 / 252,179 B |
-| 第三方模块 / External modules · 项目 FFI / Project FFI | 0 · 0 | 0 · 0 |
-| 项目测试与核心覆盖 / Project tests and library coverage | — | 160/160 × 3 · 92.8% (852/918) |
-
-恢复率只统计演练台这六个已知畸形样本。最后一个样本恢复了 JSON 语法，Schema 仍准确拒绝三个字段。JS 延迟使用同一工具链，在 Windows、Ryzen 9 8945HX、Node.js 24.20.0 上预热后取 9 批各 10,000 次的中位单次耗时。计时含解析及错误处理，不含 Schema 和页面渲染。体积是同一有效输入、输出 JSON 的最小 release 探针，含各后端运行时。Native 数据来自 Ubuntu 22.04 WSL，三组均不含演练台和 CLI。
-
-The recovery rate is for these six malformed fixtures. The final fixture repairs the syntax and still fails three schema constraints. JS timings are median time per operation over nine warmed batches of 10,000, excluding schema validation and rendering. Sizes are release probes that process the same valid input, including each runtime. Native is Linux x86-64 under WSL. The probes omit the playground and CLI.
-
-```sh
-node tools/release-bench.mjs --native-wsl Ubuntu-22.04
-```
-
-## 能力 / Features
-
-| 能力 | Behavior |
+| 能力 / Capability | 默认行为与扩展 / Behavior and opt-in |
 | --- | --- |
-| 容错修复 | Unwraps fenced JSON and prose around a structured root. Repairs missing or trailing commas, identifier keys, apostrophe strings, Python/JS literals, comments, and raw controls in strings. |
-| 流式预览 | Closes incomplete strings, arrays, and objects and completes recognizable literal prefixes. Appends chunks to a bounded buffer and can preview it at any time. |
-| 结构化审计 | Reports each repair with a machine-readable kind, action, original UTF-16 coordinates, and replacement. Preserves exact numeric lexemes. |
-| 参数 Schema | Supports `type` (including integer and unions), `required`, `properties`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength`, and `items`. Reports exact field paths. |
-| 跨后端 | Shared library targets Wasm GC, JS, and Native. Uses the MoonBit standard library with zero external modules and zero project FFI. |
+| 单块修复 / Single repair | Legacy default policy and API. Fences, comments, missing delimiters, exact decimal spelling and UTF-16 audit positions. |
+| 多块提取 / Multi-call extraction | `extract_all` finds non-overlapping candidates in prose and fenced blocks, with absolute spans and a structural confidence score. |
+| 流式检查点 / Stream checkpoint | Incremental lexical state from `push` and `status`. `finalize` seals the source and yields the authoritative repair report. |
+| JSON5 数字 / JSON5 numbers | Opt-in hex integers, leading or trailing decimal dots and leading plus. Exact decimal audit, 1,024 hex digit budget. |
+| Schema 与自愈 / Schema and coercion | Explicit `coerce_with_schema` converts supported exact string types and separately opted-in single-item arrays. `format_retry_prompt` reports remaining constraint errors. |
+| 浏览器实验室 / Browser lab | Playback with checkpoints, paired audit highlights, raw report download, retry prompt copy, and live 10,000-iteration benchmarking. |
+| 平台 / Targets | Wasm GC, JS and Native with zero external MoonBit modules and zero project FFI. |
 
 ## 快速开始 / Quick start
 
@@ -61,6 +40,16 @@ Add the test import to the consumer's `moon.pkg`, paste both examples into `read
 import {
   "ZSY2221/json_repair" @json_repair,
 } for "test"
+```
+
+五行验证修复与 Schema 规则。 Five lines to check repair and schema validation.
+
+```moonbit
+test "five-line tool call repair" {
+  let report = @json_repair.repair("{amount:42").unwrap()
+  let schema : Json = { "required": ["amount"] }
+  assert_true(@json_repair.validate(report.value, schema).is_empty())
+}
 ```
 
 以下示例修复截断的工具调用，再校验金额和货币。 This example repairs a truncated tool call and checks its amount and currency.
@@ -101,7 +90,7 @@ test "repair and validate a tool call" {
 
 把模型的每个 chunk 交给 `RepairStream::push`，用 `preview()` 读取当前前缀的临时结果，直到传输结束。预览会重新解析当前缓冲区，单次耗时随前缀长度变化。
 
-Feed chunks to `RepairStream::push` and call `preview()` for a provisional result. A preview reparses the accumulated prefix. Revalidate the final buffer before dispatching a tool call.
+Feed chunks to `RepairStream::push` and observe open delimiters and the last balanced position through `status()`. A preview reparses the accumulated prefix. Call `finalize()` on end of input, validate the final report, and reset the stream before reuse.
 
 ```moonbit
 ///|
@@ -141,6 +130,43 @@ test "preview while the model is streaming" {
 }
 ```
 
+## 批量提取与纠错 / Extraction and retries
+
+扩展能力在对应入口显式开启。低置信度表示结构或修复证据较弱。每个调用仍应独立完成 Schema 校验和执行授权。
+
+Opt in through the dedicated APIs. Lower confidence marks weaker structural evidence. Validate and authorize each tool call independently.
+
+```moonbit
+///|
+test "extract two payloads and preserve a JSON5 integer" {
+  let options : @json_repair.RepairOptions = {
+    ..@json_repair.RepairOptions::default(),
+    json5: true,
+  }
+  let reply = "First {id:0x20000000000001}\nThen [.5]"
+  let blocks = @json_repair.extract_all(reply, options).unwrap()
+  assert_eq(blocks.length(), 2)
+  assert_eq(blocks[0].report.json, "{\"id\":9007199254740993}")
+  assert_eq(blocks[1].report.json, "[0.5]")
+}
+
+///|
+test "coerce a numeric argument and request a precise retry" {
+  let input : Json = { "amount": "42.5", "currency": "BTC" }
+  let schema : Json = {
+    "properties": {
+      "amount": { "type": "number", "minimum": 0 },
+      "currency": { "enum": ["USD", "SGD"] },
+    },
+  }
+  let healed = @json_repair.coerce_with_schema(input, schema)
+  assert_eq(healed.edits.length(), 1)
+  assert_eq(healed.errors[0].path, "$.currency")
+  let prompt = @json_repair.format_retry_prompt(healed.value, schema)
+  assert_true(prompt.contains("$.currency"))
+}
+```
+
 ## 修复约定 / Repair contract
 
 - `RepairReport.json` 是紧凑 JSON，保留合法字符串转义、对象字段顺序和数字原始拼写。`value` 是 MoonBit 标准库 `Json` AST 的公共别名。`edits` 按发现顺序记录，格式化空白没有审计条目。
@@ -174,9 +200,9 @@ Stdout is one JSON report with `json`, `value`, `edits`, and `schema`. With a sc
 
 ## 演练台 / Playground
 
-从源码仓库打开 `web/index.html` 即可离线使用。内置六例，支持实时修复、前缀回放、审计点击定位和可编辑 Schema。浏览器只加载本地文件。[源码仓库](https://github.com/ZSY2221/moon_json_repair)
+从源码仓库打开 `web/index.html` 即可离线使用。内置六个基础样本和扩展示例。流式播放支持 30 / 60 / 120 tok/s、暂停、单步和重放，速率指演练台模拟分片而非模型 tokenizer。审计支持双栏定位，下载保留 MoonBit 原始报告字节。[源码仓库](https://github.com/ZSY2221/moon_json_repair)
 
-Open `web/index.html` directly from a repository checkout. Six examples demonstrate live repair, prefix playback, audit-to-source navigation, and editable schemas. The browser needs only the checked-in static assets.
+Open `web/index.html` directly from a repository checkout. The offline lab supports 30 / 60 / 120 simulated chunks per second, pause, single-step and replay. Audit records map to source and repaired output, and downloads keep the original MoonBit report text. Enable JSON5 numbers, schema coercion, or extraction explicitly.
 
 `web/engine.js` 由 `cmd/playground` 通过 MoonBit JS 后端编译。以下脚本将编译产物复制到离线页面。[GitHub Pages 发布清单](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)
 
@@ -198,24 +224,55 @@ moon doc
 node tools/verify-readme.mjs
 ```
 
-三后端各通过 160 项测试。Wasm GC 构建的核心包覆盖率为 852/918 个插桩点（92.8%）。
+Wasm GC、JS、Native 各通过 **348/348** 项测试。2,400 个固定种子样本分别跑默认修复、JSON5 修复和多块提取，成功输出均复核为严格 JSON 并保持幂等。Wasm GC 核心覆盖 **1,433/1,443（99.3%）**。
 
-All 160 tests passed on each backend. The Wasm GC build covered 852 of 918 instrumentation points in the library (92.8%).
+Each backend passed **348/348** tests. The same 2,400 seeded inputs exercise default repair, JSON5 repair and extraction. Every successful result is checked for strict JSON and idempotence. Wasm GC core coverage is **1,433/1,443 (99.3%)**.
 
 ## 基准 / Benchmarks
 
-Windows、AMD Ryzen 9 8945HX、Node.js 24.20.0，MoonBit 0.1.20261119 的 JS release 构建。表中是每次操作的平均时间及标准差，来自十组测量。
+### 四档输入 / Throughput
 
-Windows, AMD Ryzen 9 8945HX, Node.js 24.20.0, MoonBit 0.1.20261119 JS release build. Times are mean and standard deviation per operation across ten measurement groups.
+单元格为平均延迟（µs）与吞吐量（十进制 MB/s）。用重复工具调用和末尾截断构造等比例 ASCII 输入，MoonBit release，每项十组重复。Windows Ryzen 9 8945HX，JS 用 Node v24.20.0，Native 用 Ubuntu 22.04 WSL。
 
-| 工作负载 / Workload | 输入 UTF-16 单元 / Input units | 平均时间 / Mean ± SD |
+Each cell shows mean latency in microseconds and throughput in decimal MB/s. Fixtures contain repeated tool calls and a truncated tail. Ten release batches ran on a Ryzen 9 8945HX using Windows Wasm GC, Node v24.20.0 for JS, and Ubuntu 22.04 WSL for Native.
+
+| 输入 / Input | Wasm GC | JS | Native (WSL) |
+| --- | ---: | ---: | ---: |
+| 200 B | 5.81 · 34.42 | 25.02 · 7.99 | 6.43 · 31.10 |
+| 2,000 B | 61.61 · 32.46 | 310.43 · 6.44 | 67.59 · 29.59 |
+| 20,000 B | 657.36 · 30.42 | 3,340.00 · 5.99 | 689.93 · 28.99 |
+| 100,000 B | 3,510.00 · 28.49 | 18,160.00 · 5.51 | 3,500.00 · 28.57 |
+
+固定深度和字面量预算下，扫描器按 UTF-16 单元向前推进。提取器修复的候选不重叠，其总长度至多为输入长度。流式 `push` 只看新分片，`status` 读取受限栈。以上复杂度按平均常数哈希操作计。十六进制转十进制使用独立的整数运算，位数上限为 1,024。Schema 比较和逐片重复预览不在四档测量范围内。
+
+With bounded depth and literal limits, the lexer scans forward by UTF-16 code unit. Extracted repair slices are disjoint and total at most the input length. Stream `push` scans only the new shard, and `status` reads the bounded stack. The argument assumes average constant-time lookup. Hex conversion is bounded separately at 1,024 digits. Schema validation and repeated preview work are outside this throughput measurement.
+
+### 分片预览 / Streaming
+
+1,024 字节的同一截断样本。每格为逐片预览总耗时 → 只在结尾 `finalize()` 的总耗时（µs），再列出比值。计时前断言两条路径的 JSON 及审计日志相同。词法检查点是增量的，预览仍按当前完整前缀修复。
+
+Same 1,024-byte fixture. Each cell shows eager per-chunk preview → final-only time in µs and the ratio. Both paths assert identical JSON and audit before timing. The lexical checkpoint is incremental, and an explicit preview reparses the current prefix.
+
+| 分片 UTF-16 / Chunk | Wasm GC | JS | Native (WSL) |
+| ---: | ---: | ---: | ---: |
+| 16 | 1,140.00 → 39.32 · 28.99× | 5,370.00 → 170.94 · 31.41× | 1,220.00 → 40.38 · 30.21× |
+| 64 | 339.09 → 36.87 · 9.20× | 1,480.00 → 156.75 · 9.44× | 350.26 → 38.16 · 9.18× |
+| 256 | 119.12 → 37.33 · 3.19× | 536.55 → 157.33 · 3.41× | 127.47 → 38.55 · 3.31× |
+
+### 六例与产物 / Six fixtures and probe sizes
+
+六个已知畸形样本，严格解析接受 0/6，修复恢复 6/6。最终 Schema 失败例仍有业务字段错误。JS release 小样本中位单次修复 3.87–4.35 µs，取九批各 10,000 次。以下体积为同一有效输入的精简探针（字节，原始 / gzip -9），包含各后端运行时。
+
+Strict parsing accepted 0/6 and repair recovered 6/6 on the malformed fixtures. The deliberate schema failure still reports its business errors. JS small-fixture medians were 3.87–4.35 µs over nine batches of 10,000. Probe sizes below include the runtime and use the same valid input. Values are raw / gzip -9 bytes.
+
+| 后端 / Target | 严格探针 / Strict probe | 修复探针 / Repair probe |
 | --- | ---: | ---: |
-| 100 个严格 JSON 工具调用 / Strict 100-call array | 8,401 | 402.45 ± 29.41 µs |
-| 100 个混合畸形工具调用 / Damaged 100-call array | 8,811 | 490.14 ± 19.96 µs |
-| 单次截断修复和 Schema 校验 / Truncated call + schema | 60 | 9.01 ± 0.21 µs |
+| Wasm GC | 73,052 / 38,325 | 83,832 / 40,413 |
+| JS | 259,490 / 44,004 | 353,055 / 54,905 |
+| Native (WSL) | 561,816 / 242,159 | 595,880 / 254,575 |
 
 ```sh
-moon bench --target js --release --no-parallelize
+node tools/release-bench.mjs --native-wsl Ubuntu-22.04
 ```
 
 [变更记录 / Changelog](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/CHANGELOG.md) · [Apache-2.0](LICENSE)

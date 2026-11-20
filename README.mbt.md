@@ -4,6 +4,15 @@ Executable examples for the public MoonBit package.
 
 ```mbt check
 ///|
+test "five-line tool call repair" {
+  let report = @json_repair.repair("{amount:42").unwrap()
+  let schema : Json = { "required": ["amount"] }
+  assert_true(@json_repair.validate(report.value, schema).is_empty())
+}
+```
+
+```mbt check
+///|
 test "repair and validate a tool call" {
   let input =
     #|{tool:'quote', args:{amount:125.50,currency:'SGD'
@@ -71,5 +80,36 @@ test "preview while the model is streaming" {
     ),
   )
   assert_true(completed.edits.is_empty())
+}
+```
+
+```mbt check
+///|
+test "extract two payloads and preserve a JSON5 integer" {
+  let options : @json_repair.RepairOptions = {
+    ..@json_repair.RepairOptions::default(),
+    json5: true,
+  }
+  let reply = "First {id:0x20000000000001}\nThen [.5]"
+  let blocks = @json_repair.extract_all(reply, options).unwrap()
+  assert_eq(blocks.length(), 2)
+  assert_eq(blocks[0].report.json, "{\"id\":9007199254740993}")
+  assert_eq(blocks[1].report.json, "[0.5]")
+}
+
+///|
+test "coerce a numeric argument and request a precise retry" {
+  let input : Json = { "amount": "42.5", "currency": "BTC" }
+  let schema : Json = {
+    "properties": {
+      "amount": { "type": "number", "minimum": 0 },
+      "currency": { "enum": ["USD", "SGD"] },
+    },
+  }
+  let healed = @json_repair.coerce_with_schema(input, schema)
+  assert_eq(healed.edits.length(), 1)
+  assert_eq(healed.errors[0].path, "$.currency")
+  let prompt = @json_repair.format_retry_prompt(healed.value, schema)
+  assert_true(prompt.contains("$.currency"))
 }
 ```

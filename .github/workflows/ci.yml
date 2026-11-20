@@ -36,5 +36,7 @@ jobs:
           TARGET: ${{ matrix.backend }}
       - run: moon doc
         if: matrix.backend == 'wasm-gc'
+      - run: moon package --list
+        if: matrix.backend == 'wasm-gc'
       - run: node web/build.mjs
         if: matrix.backend == 'js'

@@ -7,13 +7,55 @@ import {
 }
 
 // Values
+pub fn coerce_with_schema(@json.Json, @json.Json, options? : CoercionOptions) -> CoercionReport
+
+pub fn extract_all(String, RepairOptions) -> Result[Array[ExtractedBlock], RepairError]
+
+pub fn format_retry_prompt(@json.Json, @json.Json) -> String
+
 pub fn repair(String, limits? : RepairLimits) -> Result[RepairReport, RepairError]
+
+pub fn repair_with_options(String, RepairOptions) -> Result[RepairReport, RepairError]
 
 pub fn validate(@json.Json, @json.Json) -> Array[ValidationError]
 
 // Errors
 
 // Types and methods
+#derive(Eq, @debug.Debug)
+pub struct CoercionEdit {
+  path : String
+  kind : String
+  before : @json.Json
+  after : @json.Json
+}
+pub impl @json.ToJson for CoercionEdit
+
+#derive(Eq, @debug.Debug)
+pub(all) struct CoercionOptions {
+  number_strings : Bool
+  boolean_strings : Bool
+  wrap_scalar_arrays : Bool
+}
+pub fn CoercionOptions::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub struct CoercionReport {
+  json : String
+  value : @json.Json
+  edits : Array[CoercionEdit]
+  errors : Array[ValidationError]
+}
+pub impl @json.ToJson for CoercionReport
+
+#derive(Eq, @debug.Debug, @json.ToJson)
+pub(all) struct ExtractedBlock {
+  start : SourcePosition
+  end : SourcePosition
+  confidence : Int32
+  report : RepairReport
+}
+
 #derive(Eq, @debug.Debug)
 pub(all) struct RepairEdit {
   kind : RepairKind
@@ -22,6 +64,7 @@ pub(all) struct RepairEdit {
   end_offset : Int32
   replacement : String
 }
+pub fn RepairEdit::code(Self) -> String
 pub impl @json.ToJson for RepairEdit
 
 #derive(Eq, @debug.Debug)
@@ -76,6 +119,14 @@ pub(all) struct RepairLimits {
 pub fn RepairLimits::default() -> Self
 
 #derive(Eq, @debug.Debug)
+pub(all) struct RepairOptions {
+  limits : RepairLimits
+  json5 : Bool
+  max_blocks : Int32
+}
+pub fn RepairOptions::default() -> Self
+
+#derive(Eq, @debug.Debug)
 pub(all) struct RepairReport {
   json : String
   value : @json.Json
@@ -86,16 +137,31 @@ pub impl @json.ToJson for RepairReport
 pub struct RepairStream {
   // private fields
 }
+pub fn RepairStream::finalize(Self) -> Result[RepairReport, RepairError]
 pub fn RepairStream::new(limits? : RepairLimits) -> Self
 pub fn RepairStream::preview(Self) -> Result[RepairReport, RepairError]
 pub fn RepairStream::push(Self, String) -> Result[Unit, RepairError]
 pub fn RepairStream::reset(Self) -> Unit
+pub fn RepairStream::status(Self) -> StreamStatus
+pub fn RepairStream::with_options(RepairOptions) -> Self
 
 #derive(Eq, @debug.Debug, @json.ToJson)
 pub(all) struct SourcePosition {
   offset : Int32
   line : Int32
   column : Int32
+}
+
+#derive(Eq, @debug.Debug, @json.ToJson)
+pub(all) struct StreamStatus {
+  position : SourcePosition
+  depth : Int32
+  stack : Array[String]
+  quote : String?
+  in_comment : Bool
+  stable : Bool
+  stable_offset : Int32
+  finalized : Bool
 }
 
 #derive(Eq, @debug.Debug)

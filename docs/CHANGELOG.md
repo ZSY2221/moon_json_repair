@@ -1,5 +1,13 @@
 # 更新记录 / Changelog
 
+## 0.2.0
+
+- 新增多块提取、绝对 UTF-16 审计范围和结构评分 / Multi-call extraction with absolute audit spans and structural confidence.
+- 增量检查点和终态封存 / Incremental lexical checkpoints and finalization.
+- 可选 JSON5 数字、精确 Schema 自愈与紧凑重试提示 / Opt-in JSON5 numbers, exact schema coercion, and compact retry prompts.
+- 实验室新增可控流式回放、双栏高亮、无损报告和万次浏览器基准 / Lab playback controls, paired highlights, lossless reports, and browser benchmarking.
+- 每后端 348 项通过。2,400 个固定种子样本，Wasm GC 核心覆盖 1,433/1,443 / 348 tests per backend, 2,400 seeded samples, and 1,433/1,443 Wasm GC coverage points.
+
 ## 0.1.0
 
 - 容错 JSON 词法和解析器 / Tolerant JSON lexer and parser.

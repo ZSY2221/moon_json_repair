@@ -28,7 +28,8 @@ if (manifests.length !== 1 || examples.length === 0) {
 
 const doctests = [...read(join(librarySource, "README.mbt.md")).matchAll(/^```mbt check\n([\s\S]*?)^```/gm)]
   .map((match) => match[1].trim());
-if (JSON.stringify(examples) !== JSON.stringify(doctests)) {
+const withoutBlockMarker = (block) => block.replace(/^\/\/\/\|\n/, "");
+if (JSON.stringify(examples.map(withoutBlockMarker)) !== JSON.stringify(doctests.map(withoutBlockMarker))) {
   throw new Error("README.md API examples differ from README.mbt.md.");
 }
 

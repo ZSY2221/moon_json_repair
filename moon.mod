@@ -1,6 +1,6 @@
 name = "ZSY2221/json_repair"
 
-version = "0.1.0"
+version = "0.2.0"
 
 readme = "README.md"
 
@@ -14,4 +14,4 @@ preferred_target = "wasm-gc"
 
 supported_targets = "+wasm-gc+js+native"
 
-description = "Repair incomplete LLM JSON with a source-position audit and validate tool arguments."
+description = "Extract and repair LLM tool arguments with source audits, safe schema coercion, and bounded stream checkpoints."
