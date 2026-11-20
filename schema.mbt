@@ -31,7 +31,7 @@ pub fn validate(
   let errors = []
   check_schema(schema, "$schema", 0, errors)
   if errors.is_empty() {
-    validate_node(value, schema, "$", errors)
+    validate_node(value, schema, "$", (error, _, _) => errors.push(error))
   }
   errors
 }
@@ -249,52 +249,64 @@ fn validate_node(
   value : Json,
   schema : Json,
   path : String,
-  errors : Array[ValidationError],
+  emit : (ValidationError, Json?, Json) -> Unit,
 ) -> Unit {
   if schema is Object(rules) {
     match rules.get("type") {
       Some(String(name)) =>
         if !schema_matches_type(value, name) {
-          errors.push({ path, keyword: "type", message: "expected \{name}", })
+          emit(
+            { path, keyword: "type", message: "expected \{name}", },
+            Some(value),
+            schema,
+          )
         }
       Some(Array(types)) =>
         if !types.any(entry => {
             entry is String(name) && schema_matches_type(value, name)
           }) {
           let expected = Json::array(types).stringify()
-          errors.push({
-            path,
-            keyword: "type",
-            message: "expected one of \{expected}",
-          })
+          emit(
+            { path, keyword: "type", message: "expected one of \{expected}", },
+            Some(value),
+            schema,
+          )
         }
       _ => ()
     }
     if rules.get("enum") is Some(Array(choices)) &&
       !choices.any(choice => schema_enum_equal(value, choice, 0)) {
-      errors.push({
-        path,
-        keyword: "enum",
-        message: "expected a value from enum",
-      })
+      emit(
+        { path, keyword: "enum", message: "expected a value from enum", },
+        Some(value),
+        schema,
+      )
     }
     match value {
       Number(_, ..) => {
         if rules.get("minimum") is Some(minimum) &&
           compare_schema_numbers(value, minimum) < 0 {
-          errors.push({
-            path,
-            keyword: "minimum",
-            message: "expected number >= \{minimum.stringify()}",
-          })
+          emit(
+            {
+              path,
+              keyword: "minimum",
+              message: "expected number >= \{minimum.stringify()}",
+            },
+            Some(value),
+            schema,
+          )
         }
         if rules.get("maximum") is Some(maximum) &&
           compare_schema_numbers(value, maximum) > 0 {
-          errors.push({
-            path,
-            keyword: "maximum",
-            message: "expected number <= \{maximum.stringify()}",
-          })
+          emit(
+            {
+              path,
+              keyword: "maximum",
+              message: "expected number <= \{maximum.stringify()}",
+            },
+            Some(value),
+            schema,
+          )
         }
       }
       String(text) => {
@@ -303,18 +315,26 @@ fn validate_node(
         if minimum is Some(_) || maximum is Some(_) {
           let length = Json::number(text.iter().count().to_double())
           if minimum is Some(bound) && compare_schema_numbers(length, bound) < 0 {
-            errors.push({
-              path,
-              keyword: "minLength",
-              message: "expected at least \{bound.stringify()} Unicode code points",
-            })
+            emit(
+              {
+                path,
+                keyword: "minLength",
+                message: "expected at least \{bound.stringify()} Unicode code points",
+              },
+              Some(value),
+              schema,
+            )
           }
           if maximum is Some(bound) && compare_schema_numbers(length, bound) > 0 {
-            errors.push({
-              path,
-              keyword: "maxLength",
-              message: "expected at most \{bound.stringify()} Unicode code points",
-            })
+            emit(
+              {
+                path,
+                keyword: "maxLength",
+                message: "expected at most \{bound.stringify()} Unicode code points",
+              },
+              Some(value),
+              schema,
+            )
           }
         }
       }
@@ -322,11 +342,21 @@ fn validate_node(
         if rules.get("required") is Some(Array(required)) {
           for field in required {
             if field is String(name) && !fields.contains(name) {
-              errors.push({
-                path: schema_key_path(path, name),
-                keyword: "required",
-                message: "required property is missing",
-              })
+              let child_schema = if rules.get("properties")
+                is Some(Object(properties)) {
+                properties.get(name).unwrap_or(Json::boolean(true))
+              } else {
+                Json::boolean(true)
+              }
+              emit(
+                {
+                  path: schema_key_path(path, name),
+                  keyword: "required",
+                  message: "required property is missing",
+                },
+                None,
+                child_schema,
+              )
             }
           }
         }
@@ -339,7 +369,7 @@ fn validate_node(
                 child,
                 properties[name],
                 schema_key_path(path, name),
-                errors,
+                emit,
               )
             }
           }
@@ -348,13 +378,17 @@ fn validate_node(
       Array(items) =>
         if rules.get("items") is Some(item_schema) {
           for index, item in items {
-            validate_node(item, item_schema, "\{path}[\{index}]", errors)
+            validate_node(item, item_schema, "\{path}[\{index}]", emit)
           }
         }
       _ => ()
     }
   } else if schema is False {
-    errors.push({ path, keyword: "false", message: "rejected by false schema", })
+    emit(
+      { path, keyword: "false", message: "rejected by false schema", },
+      Some(value),
+      schema,
+    )
   }
 }
 
