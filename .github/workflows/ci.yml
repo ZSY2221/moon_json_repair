@@ -1,0 +1,36 @@
+name: MoonBit CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [wasm-gc, js, native]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - run: moon version
+      - run: moon fmt --check
+        if: matrix.backend == 'wasm-gc'
+      - run: moon check --target "$TARGET" --deny-warn
+        env:
+          TARGET: ${{ matrix.backend }}
+      - run: moon test --target "$TARGET" --deny-warn
+        env:
+          TARGET: ${{ matrix.backend }}
+      - run: moon doc
+        if: matrix.backend == 'wasm-gc'
+      - run: node web/build.mjs
+        if: matrix.backend == 'js'

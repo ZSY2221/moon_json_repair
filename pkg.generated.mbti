@@ -1,0 +1,113 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "ZSY2221/json_repair"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn repair(String, limits? : RepairLimits) -> Result[RepairReport, RepairError]
+
+pub fn validate(@json.Json, @json.Json) -> Array[ValidationError]
+
+// Errors
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) struct RepairEdit {
+  kind : RepairKind
+  action : String
+  position : SourcePosition
+  end_offset : Int32
+  replacement : String
+}
+pub impl @json.ToJson for RepairEdit
+
+#derive(Eq, @debug.Debug)
+pub(all) struct RepairError {
+  kind : RepairFailureKind
+  message : String
+  position : SourcePosition
+}
+pub impl @json.ToJson for RepairError
+
+#derive(Eq, @debug.Debug)
+pub(all) enum RepairFailureKind {
+  EmptyInput
+  UnexpectedToken
+  InvalidUnicode
+  InvalidNumber
+  DuplicateKey
+  TrailingContent
+  DepthLimit
+  InputLimit
+  EditLimit
+}
+pub fn RepairFailureKind::code(Self) -> String
+
+#derive(Eq, @debug.Debug)
+pub(all) enum RepairKind {
+  StripProse
+  StripFence
+  StripBom
+  RemoveComment
+  RemoveTrailingComma
+  InsertComma
+  QuoteKey
+  NormalizeQuote
+  EscapeControl
+  EscapeBackslash
+  NormalizeLiteral
+  CompleteLiteral
+  CloseString
+  CloseArray
+  CloseObject
+  DropIncompleteMember
+}
+pub fn RepairKind::code(Self) -> String
+
+#derive(Eq, @debug.Debug)
+pub(all) struct RepairLimits {
+  max_input : Int32
+  max_depth : Int32
+  max_edits : Int32
+}
+pub fn RepairLimits::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) struct RepairReport {
+  json : String
+  value : @json.Json
+  edits : Array[RepairEdit]
+}
+pub impl @json.ToJson for RepairReport
+
+pub struct RepairStream {
+  // private fields
+}
+pub fn RepairStream::new(limits? : RepairLimits) -> Self
+pub fn RepairStream::preview(Self) -> Result[RepairReport, RepairError]
+pub fn RepairStream::push(Self, String) -> Result[Unit, RepairError]
+pub fn RepairStream::reset(Self) -> Unit
+
+#derive(Eq, @debug.Debug, @json.ToJson)
+pub(all) struct SourcePosition {
+  offset : Int32
+  line : Int32
+  column : Int32
+}
+
+#derive(Eq, @debug.Debug)
+pub struct ValidationError {
+  path : String
+  keyword : String
+  message : String
+}
+pub fn ValidationError::to_json(Self) -> @json.Json
+pub impl @json.ToJson for ValidationError
+
+// Type aliases
+pub using @json {type Json as JsonValue}
+
+// Traits
