@@ -3,6 +3,8 @@ pub struct Options {
   input : String?
   schema : String?
   ndjson : Bool
+  sse : Bool
+  emit_patches : Bool
   extract_all : Bool
   ignore_think : Bool
   coerce : Bool
@@ -35,6 +37,8 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
     input: None,
     schema: None,
     ndjson: false,
+    sse: false,
+    emit_patches: false,
     extract_all: false,
     ignore_think: false,
     coerce: false,
@@ -61,6 +65,9 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
       [argument, .. rest] => {
         options = match argument {
           "--ndjson" if !positional_only => { ..options, ndjson: true, }
+          "--sse" if !positional_only => { ..options, sse: true, }
+          "--emit-patches" if !positional_only =>
+            { ..options, emit_patches: true, }
           "--extract-all" if !positional_only =>
             { ..options, extract_all: true, }
           "--ignore-think" if !positional_only =>
@@ -86,6 +93,16 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
   }
   if options.schema is None && (options.coerce || options.retry_prompt) {
     fail_cli("usage", "--coerce and --retry-prompt require --schema", status=2)
+  }
+  if options.sse && (options.ndjson || options.extract_all) {
+    fail_cli(
+      "usage",
+      "--sse conflicts with --ndjson and --extract-all",
+      status=2,
+    )
+  }
+  if options.emit_patches && !options.sse {
+    fail_cli("usage", "--emit-patches requires --sse", status=2)
   }
   if options.input == Some("-") {
     { ..options, input: None, }

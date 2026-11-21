@@ -45,6 +45,8 @@ pub struct Options {
   input : String?
   schema : String?
   ndjson : Bool
+  sse : Bool
+  emit_patches : Bool
   extract_all : Bool
   ignore_think : Bool
   coerce : Bool
@@ -62,6 +64,33 @@ pub fn Outcome::report(Self) -> @json.Json
 pub enum PreparedInput {
   Single(@json_repair.RepairReport)
   Multiple(Array[@json_repair.ExtractedBlock])
+}
+
+pub struct SseDecoder {
+  // private fields
+}
+pub fn SseDecoder::finish(Self) -> SseInput?
+pub fn SseDecoder::line(Self) -> Int64
+pub fn SseDecoder::new(max_chars~ : Int32) -> Self
+pub fn SseDecoder::next(Self, BytesView, Int32) -> (Int32, SseInput?)
+
+pub struct SseFrame {
+  event_type : String
+  data : String
+}
+
+pub struct SseGateway {
+  // private fields
+}
+pub fn SseGateway::consume(Self, SseInput) -> Array[@json.Json]
+pub fn SseGateway::exit_status(Self) -> Int32
+pub fn SseGateway::finish(Self, Int64) -> Array[@json.Json]
+pub fn SseGateway::is_done(Self) -> Bool
+pub fn SseGateway::new(Options, @json.Json?) -> Self
+
+pub struct SseInput {
+  line : Int64
+  frame : Result[SseFrame, @json.Json]
 }
 
 // Type aliases

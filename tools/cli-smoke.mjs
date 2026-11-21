@@ -88,8 +88,8 @@ function errorReport(result, status, kind) {
   assert.equal(JSON.parse(result.stderr).error.kind, kind);
 }
 
-async function verifyLivePipe() {
-  const child = spawn(command, [...prefix, "--ndjson", "--strict-exit"], {
+async function runSegmentedPipe(args, first, second, closeInput) {
+  const child = spawn(command, [...prefix, ...args], {
     cwd: project, env, stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
@@ -102,7 +102,8 @@ async function verifyLivePipe() {
     stdout += chunk;
     if (!firstLineReceived && stdout.includes("\n")) {
       firstLineReceived = true;
-      child.stdin.end("[]\n");
+      if (closeInput) child.stdin.end(second);
+      else child.stdin.write(second);
     }
   });
   const finished = new Promise((resolve, reject) => {
@@ -112,16 +113,33 @@ async function verifyLivePipe() {
   });
   const timer = setTimeout(() => child.kill(), timeout);
   try {
-    child.stdin.write("{}\n");
+    child.stdin.write(first);
     const { status, signal } = await finished;
     assert.ok(firstLineReceived, "CLI waited for EOF before producing the first report");
     assert.equal(signal, null);
-    assert.deepEqual(reports({ status, stdout, stderr: applicationStderr(stderr) }, 0)
-      .map(({ line, json }) => [line, json]), [[1, "{}"], [2, "[]"]]);
+    return { status, stdout, stderr: applicationStderr(stderr) };
   } finally {
     clearTimeout(timer);
     if (child.exitCode === null && child.signalCode === null) child.kill();
   }
+}
+
+function sseData(message, newline = "\n") {
+  return "data: " + JSON.stringify(message) + newline + newline;
+}
+
+function chatArgs(args, { index = 0, choice = 0, id, name, messageId = "chat-1" } = {}) {
+  return sseData({
+    id: messageId,
+    choices: [{
+      index: choice,
+      delta: {
+        reasoning_content: '{"draft":true}',
+        content: '{"not_a_tool":true}',
+        tool_calls: [{ index, id, function: { name, arguments: args } }],
+      },
+    }],
+  });
 }
 
 mkdirSync(buildDir, { recursive: true });
@@ -217,7 +235,113 @@ try {
     errorReport(run(["--unknown"]), 2, "usage");
   });
 
-  await scenario("NDJSON flushes a complete record while stdin remains open", verifyLivePipe);
+  await scenario("NDJSON flushes a complete record while stdin remains open", async () => {
+    const result = await runSegmentedPipe(["--ndjson", "--strict-exit"], "{}\n", "[]\n", true);
+    assert.deepEqual(reports(result, 0).map(({ line, json }) => [line, json]), [[1, "{}"], [2, "[]"]]);
+  });
+
+  await scenario("SSE previews stream before EOF and DONE terminates the live process", async () => {
+    const result = await runSegmentedPipe(
+      ["--sse", "--emit-patches", "--strict-exit", "--schema", schema],
+      chatArgs('{"n":9007199254740993', { id: "large", name: "check_amount" }),
+      chatArgs("}") + "data: [DONE]\n\n",
+      false,
+    );
+    const [open, closed, final] = reports(result, 0);
+    assert.deepEqual([open.event, closed.event, final.event], ["patch", "patch", "tool_call"]);
+    assert.deepEqual([open.seq, closed.seq, final.seq], [1, 2, 3]);
+    assert.equal(open.call.name, "check_amount");
+    assert.equal(open.patches[0].path, "");
+    assert.equal(open.fields.find(({ pointer }) => pointer === "/n").sealed, false);
+    assert.equal(closed.fields.find(({ pointer }) => pointer === "/n").sealed, true);
+    assert.deepEqual(final.patches, []);
+    assert.equal(final.json, '{"n":9007199254740993}');
+    assert.match(result.stdout, /"value":\{"n":9007199254740993\}/);
+    assert.doesNotMatch(result.stdout, /draft|not_a_tool/);
+  });
+
+  await scenario("SSE Chat choices preserve independently interleaved calls", () => {
+    const input = chatArgs('{"n":', { id: "a" }) +
+      chatArgs('{"n":2}', { index: 1, id: "b" }) +
+      chatArgs('{"n":3}', { choice: 1, id: "c" }) +
+      chatArgs("1}") +
+      sseData({
+        id: "chat-1",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      }) +
+      "data: [DONE]\n\n";
+    const rows = reports(run(["--sse", "--strict-exit"], input), 0);
+    assert.deepEqual(rows.map(({ call, json, finish_reason }) =>
+      [call.choice_index, call.index, call.id, json, finish_reason]), [
+      [0, 0, "a", '{"n":1}', "tool_calls"],
+      [0, 1, "b", '{"n":2}', "tool_calls"],
+      [1, 0, "c", '{"n":3}', "done"],
+    ]);
+  });
+
+  await scenario("SSE Anthropic CRLF file decodes Unicode deltas and skips thinking", () => {
+    const event = (type, data = {}) =>
+      "event: " + type + "\r\n" + sseData({ type, ...data }, "\r\n");
+    const file = fixture("claude.sse",
+      "\ufeff: heartbeat\r\n\r\n" +
+      event("message_start", { message: { id: "msg-1" } }) +
+      event("content_block_start", {
+        index: 1, content_block: { type: "tool_use", id: "u0", name: "lookup", input: {} },
+      }) +
+      event("content_block_delta", {
+        index: 1, delta: { type: "thinking_delta", thinking: '{"draft":1}' },
+      }) +
+      event("content_block_delta", {
+        index: 1, delta: { type: "input_json_delta", partial_json: '{"城市":"上' },
+      }) +
+      event("content_block_delta", {
+        index: 1, delta: { type: "input_json_delta", partial_json: '海🌙"}' },
+      }) +
+      event("content_block_stop", { index: 1 }) + event("message_stop"));
+    const rows = reports(run(["--sse", "--emit-patches", "--strict-exit", file]), 0);
+    assert.deepEqual(rows.map(({ event }) => event), ["patch", "patch", "tool_call"]);
+    assert.deepEqual(rows.at(-1).call, {
+      provider: "anthropic_messages", message_id: "msg-1", index: 1, id: "u0", name: "lookup",
+    });
+    assert.equal(rows.at(-1).json, '{"城市":"上海🌙"}');
+    assert.equal(rows[1].patches[0].path, "/城市");
+    assert.equal(rows[1].fields.find(({ pointer }) => pointer === "/城市").sealed, true);
+  });
+
+  await scenario("SSE Anthropic message stop terminates a pipe with stdin open", async () => {
+    const result = await runSegmentedPipe(
+      ["--sse", "--emit-patches", "--strict-exit"],
+      sseData({
+        type: "content_block_delta", index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"ready":true}' },
+      }),
+      sseData({ type: "message_stop" }),
+      false,
+    );
+    const [preview, final] = reports(result, 0);
+    assert.equal(preview.event, "patch");
+    assert.equal(final.finish_reason, "message_stop");
+    assert.equal(final.json, '{"ready":true}');
+  });
+
+  await scenario("SSE provider faults take precedence and final Schema rules control strict status", () => {
+    const args = ["--sse", "--strict-exit", "--schema", schema, "--retry-prompt"];
+    const valid = chatArgs('{"n":1}');
+    const invalid = chatArgs('{"n":-1}', { index: 1 });
+    const done = "data: [DONE]\n\n";
+    const [ok, rejected] = reports(run(args, valid + invalid + done), 3);
+    assert.equal(ok.status, 0);
+    assert.equal(rejected.status, 3);
+    assert.match(rejected.retry_prompt, /\$\.n/);
+    const [fault, final] = reports(run(args, "data: invalid\n\n" + invalid + done), 1);
+    assert.equal(fault.error.kind, "sse_json");
+    assert.equal(final.status, 3);
+    const [eofError, eofFinal] = reports(run(args, valid + "data: [DONE]"), 1);
+    assert.equal(eofError.error.kind, "sse_truncated_event");
+    assert.equal(eofFinal.finish_reason, "eof");
+    errorReport(run(["--emit-patches"]), 2, "usage");
+    errorReport(run(["--sse", "--ndjson"]), 2, "usage");
+  });
   console.log(`Native CLI process scenarios: ${passed}/${passed} passed.`);
 } finally {
   for (const path of fixtures) unlinkSync(path);

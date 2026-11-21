@@ -38,6 +38,9 @@
 /cmd/cli/*
 !/cmd/cli/cli.mbt
 !/cmd/cli/cli_test.mbt
+!/cmd/cli/sse.mbt
+!/cmd/cli/sse_gateway.mbt
+!/cmd/cli/sse_wbtest.mbt
 !/cmd/cli/moon.pkg
 !/cmd/cli/pkg.generated.mbti
 !/cmd/main/

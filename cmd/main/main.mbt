@@ -2,14 +2,16 @@
 let usage : String =
   #|Usage: moon run --target native cmd/main -- [OPTIONS] [INPUT|-]
   #|
-  #|Read one UTF-8 JSON document from INPUT or from standard input.
+  #|Read JSON or a stream from INPUT or from standard input.
   #|  --schema FILE    Check against a strict JSON schema document.
   #|  --ndjson         Process each physical line and continue after line errors.
+  #|  --sse            Parse provider SSE tool-call arguments, emitting JSON lines.
+  #|  --emit-patches   Emit RFC 6902 progress and pointer state with --sse.
   #|  --extract-all    Return all repairable JSON blocks.
   #|  --ignore-think   Skip reasoning blocks before repairing JSON.
   #|  --coerce         Coerce schema-typed numeric and Boolean strings.
   #|  --retry-prompt   Include a repair prompt for schema errors.
-  #|  --strict-exit    Return 1 for rejected batch lines or 3 for schema errors.
+  #|  --strict-exit    Return 1 for stream errors or 3 for final schema errors.
   #|
   #|--coerce and --retry-prompt require --schema.
 
@@ -113,19 +115,69 @@ async fn run_batch(
 }
 
 ///|
+async fn write_sse_records(records : Array[Json]) -> Unit {
+  for record in records {
+    @stdio.stdout.text.write("\{record.stringify()}\n")
+  }
+}
+
+///|
+async fn run_sse(
+  reader : &@io.BinaryReader,
+  schema : Json?,
+  options : @cli.Options,
+  max_chars : Int32,
+) -> Int32 {
+  let decoder = @cli.SseDecoder::new(max_chars~)
+  let gateway = @cli.SseGateway::new(options, schema)
+  while reader.read() is Some(chunk) {
+    let mut offset = 0
+    while offset < chunk.length() {
+      let (next, input) = decoder.next(chunk[:], offset)
+      offset = next
+      if input is Some(input) {
+        write_sse_records(gateway.consume(input))
+        if gateway.is_done() {
+          return gateway.exit_status()
+        }
+      }
+    }
+  }
+  if decoder.finish() is Some(input) {
+    write_sse_records(gateway.consume(input))
+  }
+  write_sse_records(gateway.finish(decoder.line()))
+  gateway.exit_status()
+}
+
+///|
+async fn run_pipe(
+  reader : &@io.BinaryReader,
+  schema : Json?,
+  options : @cli.Options,
+  max_chars : Int32,
+) -> Int32 {
+  if options.sse {
+    run_sse(reader, schema, options, max_chars)
+  } else {
+    run_batch(reader, schema, options, max_chars)
+  }
+}
+
+///|
 async fn run(options : @cli.Options) -> Int32 {
   let max_chars = @repair.RepairLimits::default().max_input
-  if options.ndjson {
+  if options.ndjson || options.sse {
     let schema = read_schema(options.schema, max_chars)
     match options.input {
-      None => run_batch(@stdio.stdin, schema, options, max_chars)
+      None => run_pipe(@stdio.stdin, schema, options, max_chars)
       Some(path) => {
         let file = @fs.open(path[:], mode=ReadOnly) catch {
           error =>
             @cli.fail_cli("io", "could not read input: \{error.to_string()}")
         }
         defer file.close()
-        run_batch(file, schema, options, max_chars)
+        run_pipe(file, schema, options, max_chars)
       }
     }
   } else {
