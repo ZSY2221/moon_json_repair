@@ -15,11 +15,13 @@ pub(all) struct StreamStatus {
 }
 
 ///|
-/// One append-only buffer and a lexical framing checkpoint. Push observes only
-/// new code units. Preview and finalize run the authoritative syntax repair.
+/// One append-only buffer and a lexical framing checkpoint. Preview and
+/// finalize run the authoritative syntax repair. With reasoning isolation,
+/// status scans the masked prefix to handle tags split across any pushes.
 pub struct RepairStream {
   priv buffer : StringBuilder
   priv options : RepairOptions
+  priv ignore_think_blocks : Bool
   priv mut scan : FrameScanner
   priv mut size : Int32
   priv mut line : Int32
@@ -40,10 +42,17 @@ pub fn RepairStream::new(
 
 ///|
 pub fn RepairStream::with_options(options : RepairOptions) -> RepairStream {
+  RepairStream::with_policy(options.with_ignore_think_blocks(false))
+}
+
+///|
+pub fn RepairStream::with_policy(policy : RepairPolicy) -> RepairStream {
+  let options = policy.options
   let limits = options.limits.normalized()
   {
     buffer: StringBuilder(),
     options: { ..options, limits, },
+    ignore_think_blocks: policy.ignore_think_blocks,
     scan: FrameScanner::new(limits.max_depth),
     size: 0,
     line: 1,
@@ -61,10 +70,7 @@ fn RepairStream::position(self : RepairStream) -> SourcePosition {
 }
 
 ///|
-fn RepairStream::observe(self : RepairStream, unit : Char) -> Unit {
-  if self.stable_offset != 0 && !is_json_space(unit) {
-    self.trailing = true
-  }
+fn RepairStream::advance_position(self : RepairStream, unit : Char) -> Unit {
   self.size += 1
   match unit {
     '\r' => {
@@ -80,6 +86,14 @@ fn RepairStream::observe(self : RepairStream, unit : Char) -> Unit {
     _ => self.column += 1
   }
   self.after_cr = unit == '\r'
+}
+
+///|
+fn RepairStream::observe(self : RepairStream, unit : Char) -> Unit {
+  if self.stable_offset != 0 && !is_json_space(unit) {
+    self.trailing = true
+  }
+  self.advance_position(unit)
   match self.scan.feed(unit) {
     FrameClosed if self.stable_offset == 0 && !self.scan.damaged =>
       self.stable_offset = self.size
@@ -125,6 +139,18 @@ pub fn RepairStream::push(
   }
   self.buffer.write_string(chunk)
   let view = chunk[:]
+  if self.ignore_think_blocks {
+    for index in 0..<view.length() {
+      self.advance_position(char_at(view, index))
+    }
+  } else {
+    self.observe_chunk(view)
+  }
+  Ok(())
+}
+
+///|
+fn RepairStream::observe_chunk(self : RepairStream, view : StringView) -> Unit {
   let mut index = 0
   while index < view.length() {
     let end = match self.scan.mode {
@@ -143,12 +169,21 @@ pub fn RepairStream::push(
       index = end
     }
   }
-  Ok(())
 }
 
 ///|
-/// Return the lexical checkpoint without reparsing the buffered prefix.
+/// Return the lexical checkpoint. The default path uses incremental framing.
+/// Opting into reasoning isolation recomputes framing from the masked prefix.
 pub fn RepairStream::status(self : RepairStream) -> StreamStatus {
+  if self.ignore_think_blocks && self.size != 0 {
+    let input = self.buffer.to_string()
+    let cursor = Cursor::new(input[:], self.options.limits)
+    let masked = mask_think_ranges(input, cursor.think_ranges())
+    let scan = RepairStream::with_options(self.options)
+    scan.observe_chunk(masked[:])
+    scan.finalized = self.finalized
+    return scan.status()
+  }
   let quote = match self.scan.mode {
     FrameString(char) => Some(char.to_string())
     _ => None
@@ -169,7 +204,12 @@ pub fn RepairStream::status(self : RepairStream) -> StreamStatus {
 pub fn RepairStream::preview(
   self : RepairStream,
 ) -> Result[RepairReport, RepairError] {
-  repair_with_options(self.buffer.to_string(), self.options)
+  let input = self.buffer.to_string()
+  if self.ignore_think_blocks {
+    repair_with_policy(input, self.options.with_ignore_think_blocks(true))
+  } else {
+    repair_with_options(input, self.options)
+  }
 }
 
 ///|

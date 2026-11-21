@@ -533,6 +533,35 @@ pub fn repair_with_options(
 }
 
 ///|
+/// Repair a model reply using the requested protocol policy. When reasoning
+/// is ignored, exact case-insensitive think tags outside strings are controls.
+/// An opened block without a matching close runs to EOF.
+pub fn repair_with_policy(
+  input : String,
+  policy : RepairPolicy,
+) -> Result[RepairReport, RepairError] {
+  let options = policy.options
+  if !policy.ignore_think_blocks {
+    return repair_with_options(input, options)
+  }
+  let limits = options.limits.normalized()
+  let original = Cursor::new(input[:], limits, json5=options.json5)
+  if original.invalid_input(input) is Some(error) {
+    return Err(error)
+  }
+  let ranges = original.think_ranges()
+  if ranges.length() > limits.max_edits {
+    return Err(think_edit_limit(ranges[limits.max_edits].start))
+  }
+  let masked = mask_think_ranges(input, ranges)
+  let cursor = Cursor::new(masked[:], limits, json5=options.json5)
+  match cursor.report() {
+    Ok(report) => merge_think_audits(report, ranges[:], limits.max_edits)
+    Err(error) => Err(error)
+  }
+}
+
+///|
 fn repair_input(
   input : String,
   limits : RepairLimits,

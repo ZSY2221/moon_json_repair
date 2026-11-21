@@ -76,6 +76,8 @@ pub fn RepairEdit::code(self : RepairEdit) -> String {
     (NormalizeLiteral, "convert hexadecimal integer to decimal") =>
       "hex_int_to_decimal"
     (NormalizeLiteral, "normalize JSON5 decimal number") => "normalize_decimal"
+    (StripProse, "ignore think block" | "ignore unterminated think block") =>
+      "ignore_think_block"
     _ => self.kind.code()
   }
 }
@@ -168,6 +170,7 @@ pub fn RepairLimits::default() -> RepairLimits {
 ///|
 /// Extra repair behavior is explicitly enabled. Extraction considers at most
 /// max_blocks successful candidates, clamped to the inclusive range 0–4096.
+/// Start with RepairOptions::default and update only the options you need.
 #derive(Eq, Debug)
 pub(all) struct RepairOptions {
   limits : RepairLimits
@@ -178,4 +181,27 @@ pub(all) struct RepairOptions {
 ///|
 pub fn RepairOptions::default() -> RepairOptions {
   { limits: RepairLimits::default(), json5: false, max_blocks: 128, }
+}
+
+///|
+/// Protocol handling for a model reply. Wrap the existing RepairOptions so
+/// exhaustive literals and function references from earlier releases still
+/// work. Reasoning isolation is opt-in.
+#derive(Eq, Debug)
+pub(all) struct RepairPolicy {
+  options : RepairOptions
+  ignore_think_blocks : Bool
+}
+
+///|
+pub fn RepairPolicy::default() -> RepairPolicy {
+  { options: RepairOptions::default(), ignore_think_blocks: false, }
+}
+
+///|
+pub fn RepairOptions::with_ignore_think_blocks(
+  self : RepairOptions,
+  ignore_think_blocks : Bool,
+) -> RepairPolicy {
+  { options: self, ignore_think_blocks, }
 }

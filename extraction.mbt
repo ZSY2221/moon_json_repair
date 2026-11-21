@@ -292,10 +292,40 @@ pub fn extract_all(
   input : String,
   options : RepairOptions,
 ) -> Result[Array[ExtractedBlock], RepairError] {
+  extract_input(input, options, false)
+}
+
+///|
+/// Extract a model reply using the requested protocol policy. Each ignored
+/// region is audited once, on the next extracted block or the last block for
+/// trailing regions. A reply without a candidate still returns an empty array.
+pub fn extract_all_with_policy(
+  input : String,
+  policy : RepairPolicy,
+) -> Result[Array[ExtractedBlock], RepairError] {
+  extract_input(input, policy.options, policy.ignore_think_blocks)
+}
+
+///|
+fn extract_input(
+  input : String,
+  options : RepairOptions,
+  ignore_think_blocks : Bool,
+) -> Result[Array[ExtractedBlock], RepairError] {
   let limits = options.limits.normalized()
   let cursor = Cursor::new(input[:], limits, json5=options.json5)
   if cursor.invalid_input(input) is Some(error) {
     return Err(error)
+  }
+  let (cursor, ranges) = if ignore_think_blocks {
+    let ranges = cursor.think_ranges()
+    if ranges.length() > limits.max_edits {
+      return Err(think_edit_limit(ranges[limits.max_edits].start))
+    }
+    let masked = mask_think_ranges(input, ranges)
+    (Cursor::new(masked[:], limits, json5=options.json5), ranges)
+  } else {
+    (cursor, [])
   }
   let max_blocks = if options.max_blocks < 0 {
     0
@@ -304,7 +334,29 @@ pub fn extract_all(
   } else {
     options.max_blocks
   }
-  Ok(cursor.read_candidates(max_blocks)) catch {
-    Fault(error) => Err(error)
+  let blocks = cursor.read_candidates(max_blocks) catch {
+    Fault(error) => return Err(error)
   }
+  if ranges.is_empty() {
+    return Ok(blocks)
+  }
+  let mut offset = 0
+  for index in 0..<blocks.length() {
+    let start = offset
+    let block = blocks[index]
+    if index + 1 == blocks.length() {
+      offset = ranges.length()
+    } else {
+      while offset < ranges.length() &&
+            ranges[offset].start.offset < block.end.offset {
+        offset += 1
+      }
+    }
+    match
+      merge_think_audits(block.report, ranges[start:offset], limits.max_edits) {
+      Ok(report) => blocks[index] = { ..block, report, }
+      Err(error) => return Err(error)
+    }
+  }
+  Ok(blocks)
 }

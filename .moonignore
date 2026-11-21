@@ -1,5 +1,7 @@
 # Allowlist the library, checked examples, and MoonBit entry points.
 /*
+/deliverables/
+/web/
 !/LICENSE
 !/README.md
 !/README.mbt.md
@@ -14,6 +16,7 @@
 !/schema.mbt
 !/coercion.mbt
 !/stream.mbt
+!/think.mbt
 !/json_repair_test.mbt
 !/repair_audit_test.mbt
 !/repair_bench_test.mbt
@@ -23,6 +26,7 @@
 !/fuzz_test.mbt
 !/legacy_coverage_test.mbt
 !/scaling_bench_test.mbt
+!/think_test.mbt
 
 !/cmd/
 /cmd/*
