@@ -10,7 +10,7 @@ Extract independent tool calls from mixed replies, preserving exact number text 
 
 [在线演练台 / Live demo](https://zsy2221.github.io/moon_json_repair/) · [快速开始 / Quick start](#快速开始--quick-start) · [CLI](#cli) · [基准 / Benchmarks](#基准--benchmarks) · [发布清单 / Release checklist](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md)
 
-本分支准备 Mooncakes `0.2.0`。 / This branch prepares Mooncakes `0.2.0`.
+本分支准备 Mooncakes `0.3.0`。 / This branch prepares Mooncakes `0.3.0`.
 
 ## 能力 / Capability matrix
 
@@ -20,9 +20,11 @@ Extract independent tool calls from mixed replies, preserving exact number text 
 | 多块提取 / Multi-call extraction | `extract_all` finds non-overlapping candidates in prose and fenced blocks, with absolute spans and a structural confidence score. |
 | 推理块隔离 / Reasoning isolation | Opt-in `RepairPolicy` skips `<think>` blocks before repair or extraction, with source-coordinate audits. |
 | 流式检查点 / Stream checkpoint | Incremental lexical state from `push` and `status`. `finalize` seals the source and yields the authoritative repair report. |
+| Patch 与字段封口 / Patch and seals | `next_patches` emits RFC 6902 add, replace and remove operations and JSON Pointer states from successful previews. |
+| SSE 接入 / SSE gateway | Native CLI consumes chat tool-call deltas and message tool-use deltas, optionally emitting patch records. |
 | JSON5 数字 / JSON5 numbers | Opt-in hex integers, leading or trailing decimal dots and leading plus. Exact decimal audit, 1,024 hex digit budget. |
 | Schema 与自愈 / Schema and coercion | Explicit `coerce_with_schema` converts supported exact string types and separately opted-in single-item arrays. `format_retry_prompt` reports remaining constraint errors. |
-| 浏览器实验室 / Browser lab | Playback with checkpoints, paired audit highlights, raw report download, retry prompt copy, and live 10,000-iteration benchmarking. |
+| 浏览器实验室 / Browser lab | JS and Wasm GC run offline, with playback, paired audits, Patch and field views, and live 10,000-iteration benchmarking. |
 | 平台 / Targets | Wasm GC, JS and Native with zero external MoonBit modules and zero project FFI. |
 
 ## 快速开始 / Quick start
@@ -190,11 +192,44 @@ test "ignore reasoning drafts before extracting a tool call" {
 }
 ```
 
-推理隔离开启时，流式状态在需要快照时重新扫描已缓冲前缀。`finalize()` 与相同策略的一次性修复一致。执行调用前仍需完成独立的 Schema 校验、业务授权与审计。
+推理隔离开启时，`push` 增量识别跨分片标签，`status` 读取检查点。`preview`、`next_patches` 和 `finalize` 提供完整 JSON 时仍会解析缓冲区。`finalize()` 与相同策略的一次性修复一致。
 
 如果草稿自身的引号未闭合，只有独占一行且后续引号边界明确异常的关闭标签才结束隔离。边界仍有歧义时，草稿继续隔离。
 
-With reasoning isolation enabled, the stream rescans the buffered prefix when a filtered checkpoint is requested. `finalize()` matches one-shot repair with the same policy. A closing tag inside an unfinished draft string is treated as a control only on its own line and with evidence of an invalid quote boundary. Ambiguous draft contents stay isolated. Validate and authorize tool calls separately before execution.
+The reasoning matcher advances with `push` and exposes a checkpoint via `status`. Full previews, patches and final reports still parse the buffered text. `finalize()` matches one-shot repair with the same policy. A closing tag inside an unfinished draft string is treated as a control only on its own line and with evidence of an invalid quote boundary. Ambiguous draft contents stay isolated.
+
+## 实时 Patch 与字段封口 / Live patches and field seals
+
+`next_patches()` 对比本会话上一次成功快照，首次从 JSON `null` 开始。失败快照不推进前态。`reset()` 清除状态。Patch 指针包含 RFC 6901 的 `~0` 和 `~1` 转义。字段封口表示本次源前缀已经提供了真实的语法结束信号。补出的闭括号、未结束的字符串与仍可能增长的数字保持 streaming。 [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901) · [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902)
+
+`next_patches()` compares with the last successful snapshot, starting from JSON `null`. Failed previews do not advance the baseline. Each pointer uses RFC 6901 escaping. A seal describes the syntax present in this source prefix. Tool execution still requires final validation and authorization.
+
+```moonbit
+///|
+test "apply patches as a tool field seals" {
+  let stream = @json_repair.RepairStream::new()
+  stream.push("{\"args\":{\"order/id\":\"SG").unwrap()
+  let first = stream.next_patches().unwrap()
+  assert_true(
+    first.fields.any(field => {
+      field.pointer == "/args/order~1id" && !field.is_sealed
+    }),
+  )
+  stream.push("D\"}}").unwrap()
+  let next = stream.next_patches().unwrap()
+  assert_eq(next.patches[0].path, "/args/order~1id")
+  let updated = @json_repair.apply_json_patches(
+    first.report.value,
+    next.patches[:],
+  ).unwrap()
+  assert_eq(updated.stringify(), next.report.json)
+  assert_true(
+    next.fields.any(field => {
+      field.pointer == "/args/order~1id" && field.is_sealed
+    }),
+  )
+}
+```
 
 ## 修复约定 / Repair contract
 
@@ -240,15 +275,28 @@ Stdout is one JSON report with `json`, `value`, `edits`, and `schema`. With a sc
 NDJSON 默认整批返回 `0` 并通过行状态报告局部错误。用法或全局 I/O、Schema 读取失败仍返回进程错误。\
 NDJSON normally exits `0` after emitting individual line failures. Usage, I/O, and invalid schema-file JSON still affect the process exit status.
 
+### SSE 网关 / SSE gateway
+
+```sh
+moon run --target native cmd/main -- --sse --emit-patches --ignore-think --strict-exit -
+moon run --target native cmd/main -- --sse --schema ./arguments.schema.json ./capture.sse
+```
+
+每个供应商调用使用独立流。Chat Completions 风格读取 `choices[].delta.tool_calls[].function.arguments`，Messages 风格读取 `input_json_delta.partial_json`。两种格式的独立推理字段均不进入参数修复器。输出为 NDJSON，`event` 区分 `patch`、`tool_call` 与 `error`。仅最终校验参与严格退出码汇总。 [SSE 帧格式](https://html.spec.whatwg.org/multipage/server-sent-events.html) · [Chat Completions 流事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) · [Messages 流事件](https://platform.claude.com/docs/en/build-with-claude/streaming)
+
+The gateway keeps separate tool streams by choice and tool index or content block index. `--emit-patches` streams patch and field records before the final `tool_call`. `--strict-exit` gives final parse or transport failures precedence (1), then final schema failures (3), then success (0). Input comes from stdin or a captured SSE file.
+
+消费者可按 `(provider, message_id, choice_index, index)` 维护各自的 Patch 基线。`seq` 在单个调用内从 1 开始。`--coerce` 使用展示值计算 Patch，封口态仍反映原始参数文本。`[DONE]` 和 `message_stop` 可主动结束管道，未派发的尾部事件按协议边界报错。
+
 ## 演练台 / Playground
 
 从源码仓库打开 `web/index.html` 即可离线使用。内置六个基础样本和扩展示例。流式播放支持 30 / 60 / 120 tok/s、暂停、单步和重放，速率指演练台模拟分片而非模型 tokenizer。审计支持双栏定位，下载保留 MoonBit 原始报告字节。[源码仓库](https://github.com/ZSY2221/moon_json_repair)
 
-Open `web/index.html` directly from a repository checkout. The offline lab supports 30 / 60 / 120 simulated chunks per second, pause, single-step and replay. Audit records map to source and repaired output, and downloads keep the original MoonBit report text. Try the reasoning-draft preset with the `<think>` option, extraction, and stream playback together.
+Open `web/index.html` directly from a repository checkout. Both engines work offline in browsers with Wasm GC and native JS string builtins. The JS engine remains available when Wasm GC is unsupported. Try the reasoning preset, patch log, streaming and sealed parameter cards, and the 10,000-iteration comparison on one fixture.
 
 `web/engine.js` 由 `cmd/playground` 通过 MoonBit JS 后端编译。以下脚本将编译产物复制到离线页面。[GitHub Pages 发布清单](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)
 
-`web/engine.js` is generated from `cmd/playground` using the MoonBit JS backend. Rebuild it with the following command. [GitHub Pages deployment checklist](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)
+`web/engine.js` and the offline Wasm GC byte carrier are generated from `cmd/playground`. Rebuild both with the following command. [GitHub Pages deployment checklist](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/PUBLISH_CHECKLIST.md#2-推送-github-并部署-pages)
 
 ```sh
 node web/build.mjs
@@ -267,96 +315,101 @@ for target in wasm-gc js native; do
 done
 moon doc
 node tools/cli-smoke.mjs
+node tools/core-coverage.mjs
 ```
 
-Wasm GC、JS、Native 各通过 **382/382** 项测试，独立消费模块各执行 6 条 README 测试。2,400 个固定种子样本分别跑默认修复、JSON5 修复和多块提取。成功输出均复核为严格 JSON 并保持幂等。Wasm GC 核心覆盖 **1,655/1,682（98.4%）**，Native CLI 通过 **9/9** 项进程实测。
+Wasm GC、JS、Native 各通过 **691/691** 项测试。独立消费模块各执行 7 条 README 测试。5,200 个固定种子样本包括 2,400 个通用变异和 2,800 个随机推理块、分片与 Patch 回放样本。Wasm GC 核心覆盖 **2,124/2,133（99.58%）**。Native CLI 通过 **14/14** 项进程实测，其中 5 项直接验证 SSE。
 
-Each backend passed **382/382** tests and six independent README consumer tests. The same 2,400 seeded inputs exercise default repair, JSON5 repair and extraction. Every successful result is checked for strict JSON and idempotence. Wasm GC core coverage is **1,655/1,682 (98.4%)**. The Native CLI passed **9/9** process scenarios.
+Each backend passed **691/691** tests and seven independent README consumer tests. The 5,200 seeded inputs include 2,400 general mutations and 2,800 runs with randomized reasoning, chunk boundaries, and patch replay. Wasm GC core coverage is **2,124/2,133 (99.58%)**. The Native CLI passed **14/14** process scenarios, including five live SSE scenarios.
 
 ## 基准 / Benchmarks
 
-### 模型故障语料 / LLM failure corpus
+### RFC 8259 与模型故障语料 / Conformance and tool-call corpus
 
-34 条固定、人工构造的生产故障风格样本，覆盖推理草稿、围栏和引号、拼接调用、UTF-16 截断、精确大整数、深度上限和 Schema 业务错误。 / The 34 checked-in fixtures model production failures and contain synthetic inputs.
+采用固定版本 JSONTestSuite 和 RFC 控制字符用例。93 个合法样本仅移除格式化空白，审计为零。两条上游重复键样本归为互操作保护用例。44 条工具调用故障样本由人工构造，覆盖分片、推理草稿、精确数字和 Schema。 [语料与许可](corpus/README.md) · [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)
 
-| 指标 / Metric | `JSON.parse` | `moon_json_repair` |
-| --- | ---: | ---: |
-| 可恢复样本被接受 / Recoverable inputs accepted | 12/28 | 28/28 |
-| 调用数量和规范输出完全匹配 / Exact call count and output | 7/28 | 28/28 |
-| 保护样本按指定类型拒绝 / Exact guard outcome | — | 6/6 |
-| Schema 路径、关键字与纠错精确匹配 / Exact schema outcome | — | 7/7 |
+The corpus pins JSONTestSuite and adds raw-control cases from RFC 8259. Duplicate-key cases are tracked as policy rejections. The 44 synthetic model-output fixtures contain no provider transcripts. [Fixture methodology](corpus/README.md)
 
-严格解析在完整集合上接受 14/34。精确匹配比较紧凑 JSON 原文，包含数字拼写。两项额外接受属于应被保护性拒绝的输入。Schema 行单独评估路径、关键字、类型自愈和重试提示。\
-Strict parsing accepts 14/34 across the full corpus, including two cases marked for policy rejection. Exact output compares compact text including numeric spelling. Schema outcomes check paths, keywords, coercions, and retry instructions separately.
+| 对照 / Comparison | `JSON.parse` | MoonBit Wasm GC | MoonBit JS | MoonBit Native |
+| --- | ---: | ---: | ---: | ---: |
+| RFC 合法样本接受 / Accepted valid RFC cases | 93/93 | 93/93 | 93/93 | 93/93 |
+| RFC 合法样本原文保真、零审计 / Exact valid output and zero edits | — | 93/93 | 93/93 | 93/93 |
+| RFC 可恢复项精确输出 / Exact RFC output | 56/181 | 181/181 | 181/181 | 181/181 |
+| RFC 保护拒绝 / RFC policy rejections | 64/67 | 67/67 | 67/67 | 67/67 |
+| 工具调用精确恢复 / Exact tool-call recovery | 7/36 | 36/36 | 36/36 | 36/36 |
+| 工具调用保护拒绝 / Tool-call policy rejections | 5/8 | 8/8 | 8/8 | 8/8 |
+| 精度用例原文匹配 / Exact precision cases | 2/18 | 18/18 | 18/18 | 18/18 |
+| Schema 路径、约束与自愈 / Exact Schema outcomes | — | 8/8 | 8/8 | 8/8 |
+| 混合语料 / Mixed-corpus µs per input · MB/s | 3.85 · 4.31 | 5.73 · 2.90 | 8.83 · 1.88 | 12.51 · 1.33 |
+| 运行产物 / Runner artifact gzip -9 bytes | — | 71,377 | 98,824 | 346,124 |
+
+精确匹配比较紧凑输出，包含数字原文。严格基线用 `JSON.parse` 后再序列化，拒绝率按异常计。MoonBit 路径生成含审计的报告，保护拒绝还核对错误类型。混合基准取五组中位数，每组 25 轮全部 292 个样本。Native 含一次启动的摊销，Gzip 体积包含用例执行器。浏览器的两个体积对应同一桥接接口。
+
+Exact comparisons include numeric lexemes. The baseline parses and serializes, and counts throws as rejection. MoonBit produces an audit report and checks the precise rejection kind. Mixed timings are the median of five batches, each running all 292 inputs for 25 rounds. Native includes amortized process startup, and its size includes the fixture runner.
 
 ```sh
 node web/build.mjs
-node tools/eval-corpus.mjs
+node tools/eval-corpus.mjs --native
 ```
 
-### JS 报名后优化记录 / Previous JS optimization
+Windows 用 `node tools/eval-corpus.mjs --native-wsl DISTRO`。交叉语料评测需要 Node 24，Mooncakes 库本身按三目标独立编译。
 
-Windows Ryzen 9 8945HX、Node v24.20.0、MoonBit 0.1.20261119。每项为十组 release 测量均值，使用同一输入对比 `8a3469b` 与 `bb86fca`。流式分片这一行只计写入和读取一次检查点。
+### 100 KB 热路径前后 / 100 KB hot path
 
-Each row compares `8a3469b` and `bb86fca` over ten release batches on the same input and toolchain. The stream row measures appending shards and reading one checkpoint.
+同机复跑 Git `150ccff` 与本版，Ryzen 9 8945HX、MoonBit `0.1.20261119`、Node `24.20.0`、Ubuntu 22.04.5 WSL。固定负载为重复标准键、十进制工具参数及截断尾部。基准记录 10 组 release 均值。
 
-| 场景 / Workload | 基线 / Baseline | 优化后 / Optimized |
-| --- | ---: | ---: |
-| 约 100 KB 截断 ASCII 字符串 / Truncated string | 977.24 µs | 612.20 µs |
-| Emoji 和转义字符 / Emoji and escapes | 1.72 ms | 1.17 ms |
-| 2,000 个流式分片 / Stream shards | 522.53 µs | 97.89 µs |
-| 100 KB 畸形工具调用 / Malformed tool calls | 18.53 ms | 16.00 ms |
-
-```sh
-moon bench --target js --release --no-parallelize -p ZSY2221/json_repair -f repair_bench_test.mbt
-moon bench --target js --release --no-parallelize -p ZSY2221/json_repair -f scaling_bench_test.mbt
-```
-
-### 四档输入 / Throughput
-
-单元格为平均延迟（µs）与吞吐量（十进制 MB/s）。用重复工具调用和末尾截断构造 ASCII 输入，MoonBit release，每项十组重复。CPU 为 Ryzen 9 8945HX，JS 使用 Node v24.20.0，Native 使用 Ubuntu 22.04.5 WSL。推理块隔离使用默认关闭设置。
-
-Each cell shows mean latency in microseconds and throughput in decimal MB/s. Fixtures contain repeated tool calls and a truncated tail. Ten release batches ran on a Ryzen 9 8945HX using Windows Wasm GC, Node v24.20.0 for JS, and Ubuntu 22.04.5 WSL for Native. Reasoning isolation used its default disabled setting.
-
-| 输入 / Input | Wasm GC | JS | Native (WSL) |
+| 后端 / Target | 150ccff ms / MB/s | 0.3.0 ms / MB/s | 吞吐量变化 / Throughput |
 | --- | ---: | ---: | ---: |
-| 200 B | 6.00 · 33.33 | 24.93 · 8.02 | 5.02 · 39.84 |
-| 2,000 B | 63.14 · 31.68 | 307.24 · 6.51 | 54.12 · 36.95 |
-| 20,000 B | 670.51 · 29.83 | 3,380.00 · 5.92 | 560.39 · 35.69 |
-| 100,000 B | 3,500.00 · 28.57 | 17,800.00 · 5.62 | 3,040.00 · 32.89 |
+| Wasm GC | 3.62 / 27.62 | 3.17 / 31.55 | +14.2% |
+| JS | 18.35 / 5.45 | 16.04 / 6.23 | +14.3% |
+| Native (WSL) | 3.05 / 32.79 | 2.51 / 39.84 | +21.5% |
 
-固定深度和字面量预算下，扫描器按 UTF-16 单元向前推进。提取器修复的候选不重叠，其总长度至多为输入长度。流式 `push` 只看新分片，`status` 读取受限栈。以上复杂度按平均常数哈希操作计。十六进制转十进制使用独立的整数运算，位数上限为 1,024。Schema 比较和逐片重复预览不在四档测量范围内。
+普通双引号键直接取已解码原文，保留含转义键的严格解码与重复检查。字符串和数字按无换行区段更新游标，调整审计位置时仍保留原始 UTF-16 行列。在该负载上，单份报告仍使用标准库完整解析以生成 AST。
 
-With bounded depth and literal limits, the lexer scans forward by UTF-16 code unit. Extracted repair slices are disjoint and total at most the input length. Stream `push` scans only the new shard, and `status` reads the bounded stack. The argument assumes average constant-time lookup. Hex conversion is bounded separately at 1,024 digits. Schema validation and repeated preview work are outside this throughput measurement.
+Plain quoted keys bypass a second strict parser invocation. Escaped keys still decode before duplicate detection. Strings and digits advance the cursor in flat runs, preserving UTF-16 coordinates and exact decimal spellings. The finished JSON still passes through the strict parser for its AST.
 
-### 分片预览 / Streaming
+同一 100 KB 载荷的隔离消融另测一轮。Wasm GC 当前、恢复逐键解析、再恢复逐单位游标分别为 3.12、3.40、3.44 ms。Native 当前两次复测为 2.66、2.68 ms，逐键解析为 2.76 ms，两项均恢复时为 2.88 和 3.57 ms。Native 波动较大，单项贡献以对照方向为准。
 
-1,024 字节的同一截断样本。每格为逐片预览总耗时 → 只在结尾 `finalize()` 的总耗时（µs），再列出比值。计时前断言两条路径的 JSON 及审计日志相同。词法检查点是增量的，预览仍按当前完整前缀修复。
+On the isolated 100 KB ablation, Wasm GC measured 3.12 ms with both changes, 3.40 ms with key re-parsing restored, and 3.44 ms when per-unit cursor updates were also restored. Native timings varied between runs. The controlled variants support the direction of the optimization.
 
-Same 1,024-byte fixture. Each cell shows eager per-chunk preview → final-only time in µs and the ratio. Both paths assert identical JSON and audit before timing. The lexical checkpoint is incremental, and an explicit preview reparses the current prefix.
+| 输入 / Input | Wasm GC µs / MB/s | JS µs / MB/s | Native µs / MB/s |
+| --- | ---: | ---: | ---: |
+| 200 B | 5.30 / 37.74 | 23.27 / 8.59 | 4.53 / 44.15 |
+| 2,000 B | 56.60 / 35.34 | 291.30 / 6.87 | 47.13 / 42.44 |
+| 20,000 B | 599.63 / 33.35 | 3,020.00 / 6.62 | 487.64 / 41.01 |
+| 100,000 B | 3,170.00 / 31.55 | 16,040.00 / 6.23 | 2,510.00 / 39.84 |
 
-| 分片 UTF-16 / Chunk | Wasm GC | JS | Native (WSL) |
+### 推理检查点 / Reasoning checkpoints
+
+在 1,024 B 同一输入上，每个分片写入后读取状态。每格为 v0.2 重扫路径与 v0.3 检查点的均值（µs），再列出比值。比较先断言流终态和一次性修复的 JSON、审计逐字一致。
+
+| 分片 UTF-16 | Wasm GC µs | JS µs | Native µs |
 | ---: | ---: | ---: | ---: |
-| 16 | 1,140.00 → 36.98 · 30.83× | 5,490.00 → 158.49 · 34.64× | 1,060.00 → 34.71 · 30.54× |
-| 64 | 317.55 → 36.07 · 8.80× | 1,520.00 → 157.82 · 9.63× | 296.48 → 33.42 · 8.87× |
-| 256 | 115.46 → 35.28 · 3.27× | 542.84 → 159.27 · 3.41× | 108.14 → 33.64 · 3.21× |
+| 16 | 475.49 → 16.83 · 28.25× | 1,050.00 → 17.57 · 59.76× | 482.70 → 14.17 · 34.06× |
+| 64 | 137.59 → 17.97 · 7.66× | 275.81 → 17.08 · 16.15× | 126.23 → 11.41 · 11.06× |
+| 256 | 38.79 → 17.23 · 2.25× | 81.91 → 16.67 · 4.91× | 36.71 → 10.75 · 3.41× |
+| 50,000 B 未闭合，256 单元分片 | 72,980 → 741.59 · 98.41× | 136,950 → 643.37 · 212.86× | 64,470 → 451.84 · 142.68× |
 
-### 六例与产物 / Six fixtures and probe sizes
+5 KB 到 50 KB 的未闭合样本使用 256 单元分片时，新检查点的耗时分别增加 11.93×（Wasm GC）、9.88×（JS）、9.81×（Native）。每个输入单元仅送入检查点一次，读状态不重扫前缀。完整预览和 Patch 会重解析当前前缀。缓冲区保留原文，词法状态受深度限制。
 
-六个已知畸形样本，MoonBit 严格解析接受 0/6，修复恢复 6/6。最终 Schema 失败例仍有业务字段错误。JS release 小样本中位单次修复 3.39–4.14 µs，取九批各 10,000 次。以下体积为同一有效输入的精简探针（字节，原始 / gzip -9），包含各后端运行时。
-
-MoonBit strict parsing accepted 0/6 and repair recovered 6/6 on the malformed fixtures. The deliberate schema failure still reports its business errors. JS small-fixture medians were 3.39–4.14 µs over nine batches of 10,000. Probe sizes below include the runtime and use the same valid input. Values are raw / gzip -9 bytes.
-
-| 后端 / Target | 严格探针 / Strict probe | 修复探针 / Repair probe |
-| --- | ---: | ---: |
-| Wasm GC | 73,052 / 38,325 | 83,656 / 40,420 |
-| JS | 259,490 / 44,004 | 353,606 / 54,949 |
-| Native (WSL) | 561,840 / 242,166 | 595,848 / 255,292 |
+On the same unclosed input at 256 units per shard, growing 5 KB to 50 KB takes 11.93×, 9.88× and 9.81× at the checkpoint, respectively. The matcher consumes each source unit once. Full previews still parse the current prefix. The source buffer retains the input, and framing state stays bounded by the depth limit.
 
 ```sh
 node tools/release-bench.mjs
 ```
 
-Windows 使用 `node tools/release-bench.mjs --native-wsl DISTRO` 指定已安装工具链的 WSL 实例。 / On Windows, supply `--native-wsl DISTRO` for the installed Native toolchain.
+Windows 可传 `--native-wsl DISTRO` 指定已安装 MoonBit 和 C 工具链的 WSL。基准还输出默认策略的逐片预览与单次终态对比，以及同一小输入的原始／Gzip 探针体积。
+
+### 浏览器双引擎 / Browser dual-engine probe
+
+Edge 157 在 Pages 子路径模拟环境加载 7 个本地资源，HTTP 和控制台错误均为零。Wasm GC 使用官方 JS 字符串内建函数选项，实测普通宿主导入为零。离线 HTML 可载入编码在本地脚本中的 Wasm 字节。 [MoonBit JS 字符串内建函数](https://www.moonbitlang.com/blog/js-string-builtins)
+
+| 固定截断样本（各 10,000 次） / Fixed truncated example | 修复率 | 中位 µs | MB/s |
+| --- | ---: | ---: | ---: |
+| MoonBit Wasm GC | 100% | 4.80 | 23.76 |
+| MoonBit JS | 100% | 6.80 | 17.96 |
+| `JSON.parse` | 0% | 2.80 | 45.45 |
+
+原始 Wasm GC 154,934 B（Gzip 71,377 B），JS 712,564 B（Gzip 98,824 B）。测试涵盖 390px、离线回退、Patch、字段封口、推理隔离与无损下载。
 
 [变更记录 / Changelog](https://github.com/ZSY2221/moon_json_repair/blob/main/docs/CHANGELOG.md) · [Apache-2.0](LICENSE)

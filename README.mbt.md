@@ -127,3 +127,30 @@ test "ignore reasoning drafts before extracting a tool call" {
   assert_eq(blocks[0].report.edits[0].action, "ignore think block")
 }
 ```
+
+```mbt check
+///|
+test "apply patches as a tool field seals" {
+  let stream = @json_repair.RepairStream::new()
+  stream.push("{\"args\":{\"order/id\":\"SG").unwrap()
+  let first = stream.next_patches().unwrap()
+  assert_true(
+    first.fields.any(field => {
+      field.pointer == "/args/order~1id" && !field.is_sealed
+    }),
+  )
+  stream.push("D\"}}").unwrap()
+  let next = stream.next_patches().unwrap()
+  assert_eq(next.patches[0].path, "/args/order~1id")
+  let updated = @json_repair.apply_json_patches(
+    first.report.value,
+    next.patches[:],
+  ).unwrap()
+  assert_eq(updated.stringify(), next.report.json)
+  assert_true(
+    next.fields.any(field => {
+      field.pointer == "/args/order~1id" && field.is_sealed
+    }),
+  )
+}
+```

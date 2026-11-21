@@ -19,11 +19,12 @@
   node web/build.mjs
   node tools/eval-corpus.mjs
   node tools/cli-smoke.mjs
+  node tools/core-coverage.mjs
   moon package --list
   moon package
   ```
 
-- [ ] 核对 `README.md` 的 API、CLI 与 Demo 步骤能从干净检出运行。打开 `web/index.html`，检查推理预设、审计跳转、Schema 状态和无损下载。归档按 `.moonignore` 核对，确认发布内容为库、测试、CLI、演练台桥接源码、README 和许可证。
+- [ ] 核对 `README.md` 的 API、CLI 与 Demo 步骤能从干净检出运行。打开 `web/index.html`，切换 JS 和 Wasm GC，检查流式 Patch、字段封口、审计跳转、Schema 与无损下载。按 `.moonignore` 检查归档，确认私有交付物、静态资产、开发工具和语料均排除。
 - [ ] 核对 `git status --short`、`git log --oneline` 和 `git remote -v`。将可复现的验证结果和实际开发记录留在公开仓库。
 
 ## 2. 推送 GitHub 并部署 Pages
