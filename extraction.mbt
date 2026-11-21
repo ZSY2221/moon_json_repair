@@ -94,7 +94,7 @@ fn Cursor::record_candidate(
   max_blocks : Int32,
 ) -> Unit raise RepairFault {
   let start = candidate.start
-  let end = self.position
+  let end = self.position()
   let source = self.span(start.offset, end.offset)
   let block = Cursor::new(source, self.limits, json5=self.json5)
   match block.report() {
@@ -161,7 +161,7 @@ fn Cursor::read_candidates(
   let mut line_indent_only = true
   let mut fence_seek = FrameScanner::new(1)
   while !self.at_end() {
-    let at = self.position
+    let at = self.position()
     if at.column == 1 && fence_at(self.input, at.offset) is Some(marker) {
       let boundary = match fence {
         None => true

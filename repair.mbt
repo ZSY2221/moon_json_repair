@@ -204,7 +204,7 @@ fn Cursor::separator(
   if self.at_end() || self.peek() == closer {
     return EndContainer
   }
-  let at = self.position
+  let at = self.position()
   if self.peek() == ',' {
     self.bump()
     self.skip_trivia()
@@ -240,14 +240,14 @@ fn Cursor::close_container(
       self.edit(
         CloseArray,
         "close truncated array",
-        self.position,
+        self.position(),
         replacement="]",
       )
     } else {
       self.edit(
         CloseObject,
         "close truncated object",
-        self.position,
+        self.position(),
         replacement="}",
       )
     }
@@ -277,7 +277,7 @@ fn Cursor::read_array(
           self.edit(
             InsertComma,
             "insert missing comma",
-            self.position,
+            self.position(),
             replacement=",",
           )
       }
@@ -314,7 +314,7 @@ fn Cursor::read_object(
   self.skip_trivia()
   let mut preceding = EndContainer
   while !self.at_end() && self.peek() != '}' {
-    let key_at = self.position
+    let key_at = self.position()
     let member_at = match preceding {
       ExplicitComma(at) => at
       MissingComma => {
@@ -377,7 +377,7 @@ fn Cursor::finish_prose(self : Cursor, allow : Bool) -> Unit raise RepairFault {
   if self.at_end() {
     return
   }
-  let at = self.position
+  let at = self.position()
   let c = self.peek()
   let remaining = self.span(0, self.limit)
   if !allow ||
@@ -403,7 +403,7 @@ fn Cursor::finish_prose(self : Cursor, allow : Bool) -> Unit raise RepairFault {
 ///|
 fn Cursor::read_document(self : Cursor) -> String raise RepairFault {
   if self.peek() == '\uFEFF' {
-    let at = self.position
+    let at = self.position()
     self.bump()
     self.edit(StripBom, "remove leading Unicode BOM", at)
   }
@@ -412,7 +412,7 @@ fn Cursor::read_document(self : Cursor) -> String raise RepairFault {
     self.reject(EmptyInput, "expected a JSON value")
   }
 
-  let start = self.position
+  let start = self.position()
   let first = self.peek()
   let is_root = first is ('{' | '[' | '"' | '\'' | '-') ||
     (self.json5 && first is ('.' | '+') && self.peek(ahead=1).is_ascii_digit()) ||
@@ -426,7 +426,7 @@ fn Cursor::read_document(self : Cursor) -> String raise RepairFault {
         if start.offset != open.start {
           self.edit(StripProse, "remove text before JSON", start)
         }
-        let marker = self.position
+        let marker = self.position()
         self.advance(open.after)
         self.edit(StripFence, "remove opening Markdown fence", marker)
         closing = find_fence(self.input, open.after, true)
@@ -454,7 +454,7 @@ fn Cursor::read_document(self : Cursor) -> String raise RepairFault {
   self.finish_prose(structured)
   if closing is Some(close) {
     self.limit = self.input.length()
-    let marker = self.position
+    let marker = self.position()
     self.advance(close.after)
     self.edit(StripFence, "remove closing Markdown fence", marker)
     self.finish_prose(true)
@@ -549,14 +549,14 @@ fn repair_input(
 ///|
 fn Cursor::invalid_input(cursor : Cursor, input : String) -> RepairError? {
   if input.length() > cursor.limits.max_input {
-    return Some(input_limit_error(cursor.position))
+    return Some(input_limit_error(cursor.position()))
   }
   if invalid_utf16_at(input) is Some(offset) {
     cursor.advance(offset)
     return Some({
       kind: InvalidUnicode,
       message: "expected well-formed UTF-16 input",
-      position: cursor.position,
+      position: cursor.position(),
     })
   }
   None
@@ -575,7 +575,7 @@ fn Cursor::report(cursor : Cursor) -> Result[RepairReport, RepairError] {
       return Err({
         kind: UnexpectedToken,
         message: "repaired document cannot be decoded as JSON",
-        position: cursor.position,
+        position: cursor.position(),
       })
   }
   Ok({ json, value, edits: cursor.edits, })

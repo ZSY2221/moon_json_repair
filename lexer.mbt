@@ -7,7 +7,9 @@ priv suberror RepairFault {
 priv struct Cursor {
   input : StringView
   mut limit : Int32
-  mut position : SourcePosition
+  mut offset : Int32
+  mut line : Int32
+  mut column : Int32
   mut after_cr : Bool
   edits : Array[RepairEdit]
   limits : RepairLimits
@@ -23,7 +25,9 @@ fn Cursor::new(
   {
     input,
     limit: input.length(),
-    position: { offset: 0, line: 1, column: 1, },
+    offset: 0,
+    line: 1,
+    column: 1,
     after_cr: false,
     edits: [],
     limits,
@@ -32,8 +36,13 @@ fn Cursor::new(
 }
 
 ///|
+fn Cursor::position(self : Cursor) -> SourcePosition {
+  { offset: self.offset, line: self.line, column: self.column, }
+}
+
+///|
 fn Cursor::peek(self : Cursor, ahead~ : Int32 = 0) -> Char {
-  let offset = self.position.offset + ahead
+  let offset = self.offset + ahead
   if offset >= self.limit {
     '\u{FFFF}'
   } else {
@@ -43,29 +52,36 @@ fn Cursor::peek(self : Cursor, ahead~ : Int32 = 0) -> Char {
 
 ///|
 fn Cursor::at_end(self : Cursor) -> Bool {
-  self.position.offset >= self.limit
+  self.offset >= self.limit
 }
 
 ///|
 fn Cursor::bump(self : Cursor) -> Unit {
-  let c = self.peek()
-  let { offset, line, column, } = self.position
-  self.position = match c {
-    '\r' => { offset: offset + 1, line: line + 1, column: 1, }
-    '\n' =>
-      {
-        offset: offset + 1,
-        line: line + (if self.after_cr { 0 } else { 1 }),
-        column: 1,
+  self.consume(self.peek())
+}
+
+///|
+fn Cursor::consume(self : Cursor, c : Char) -> Unit {
+  self.offset += 1
+  match c {
+    '\r' => {
+      self.line += 1
+      self.column = 1
+    }
+    '\n' => {
+      if !self.after_cr {
+        self.line += 1
       }
-    _ => { offset: offset + 1, line, column: column + 1, }
+      self.column = 1
+    }
+    _ => self.column += 1
   }
   self.after_cr = c == '\r'
 }
 
 ///|
 fn Cursor::advance(self : Cursor, offset : Int32) -> Unit {
-  while self.position.offset < offset {
+  while self.offset < offset {
     self.bump()
   }
 }
@@ -77,7 +93,7 @@ fn Cursor::span(self : Cursor, start : Int32, end : Int32) -> StringView {
 
 ///|
 fn Cursor::starts(self : Cursor, token : StringView) -> Bool {
-  let start = self.position.offset
+  let start = self.offset
   start + token.length() <= self.limit && units_match(self.input, start, token)
 }
 
@@ -101,7 +117,7 @@ fn Cursor::reject(
   message : String,
   at? : SourcePosition,
 ) -> Unit raise RepairFault {
-  raise Fault({ kind, message, position: at.unwrap_or(self.position), })
+  raise Fault({ kind, message, position: at.unwrap_or(self.position()), })
 }
 
 ///|
@@ -120,7 +136,7 @@ fn Cursor::edit(
     kind,
     action,
     position,
-    end_offset: end_offset.unwrap_or(self.position.offset),
+    end_offset: end_offset.unwrap_or(self.offset),
     replacement,
   })
 }
@@ -143,22 +159,24 @@ fn is_identifier_continue(c : Char) -> Bool {
 ///|
 fn Cursor::skip_trivia(self : Cursor) -> Unit raise RepairFault {
   while !self.at_end() {
-    let at = self.position
-    if is_json_space(self.peek()) {
-      self.bump()
+    let c = self.peek()
+    if is_json_space(c) {
+      self.consume(c)
     } else if self.starts("//") {
+      let at = self.position()
       self.advance(at.offset + 2)
       while !self.at_end() && !(self.peek() is ('\r' | '\n')) {
         self.bump()
       }
       self.edit(RemoveComment, "remove line comment", at)
     } else if self.starts("/*") {
+      let at = self.position()
       self.advance(at.offset + 2)
       while !self.at_end() && !self.starts("*/") {
         self.bump()
       }
       if !self.at_end() {
-        self.advance(self.position.offset + 2)
+        self.advance(self.offset + 2)
       }
       self.edit(RemoveComment, "remove block comment", at)
     } else {
@@ -210,7 +228,7 @@ fn Cursor::read_escape(
   quote : Char,
   out : StringBuilder,
 ) -> Unit raise RepairFault {
-  let at = self.position
+  let at = self.position()
   self.bump()
   let valid = match self.peek() {
     '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' => 1
@@ -232,8 +250,8 @@ fn Cursor::read_escape(
     _ => 0
   }
   if valid > 0 {
-    self.advance(self.position.offset + valid)
-    out.write_view(self.span(at.offset, self.position.offset))
+    self.advance(self.offset + valid)
+    out.write_view(self.span(at.offset, self.offset))
   } else if quote == '\'' && self.peek() == '\'' {
     self.bump()
     out.write_char('\'')
@@ -259,9 +277,9 @@ fn Cursor::read_string(
   self : Cursor,
   out : StringBuilder,
 ) -> Unit raise RepairFault {
-  let open = self.position
+  let open = self.position()
   let quote = self.peek()
-  self.bump()
+  self.consume(quote)
   out.write_char('"')
   if quote == '\'' {
     self.edit(
@@ -271,13 +289,13 @@ fn Cursor::read_string(
       replacement="\"",
     )
   }
-  let mut chunk = self.position.offset
+  let mut chunk = self.offset
   while !self.at_end() {
     let c = self.peek()
     if c == quote {
-      let close = self.position
+      let close = self.position()
       out.write_view(self.span(chunk, close.offset))
-      self.bump()
+      self.consume(c)
       out.write_char('"')
       if quote == '\'' {
         self.edit(
@@ -290,12 +308,12 @@ fn Cursor::read_string(
       return
     }
     if c == '\\' || c == '"' || c.to_int() < 32 {
-      let at = self.position
+      let at = self.position()
       out.write_view(self.span(chunk, at.offset))
       if c == '\\' {
         self.read_escape(quote, out)
       } else {
-        self.bump()
+        self.consume(c)
         let replacement = if c == '"' { "\\\"" } else { control_escape(c) }
         out.write_string(replacement)
         if c == '"' {
@@ -314,17 +332,17 @@ fn Cursor::read_string(
           )
         }
       }
-      chunk = self.position.offset
+      chunk = self.offset
     } else {
-      self.bump()
+      self.consume(c)
     }
   }
-  out.write_view(self.span(chunk, self.position.offset))
+  out.write_view(self.span(chunk, self.offset))
   out.write_char('"')
   self.edit(
     CloseString,
     "close truncated string",
-    self.position,
+    self.position(),
     replacement="\"",
   )
 }
@@ -338,7 +356,7 @@ fn Cursor::read_key(
     self.read_string(out)
     return
   }
-  let at = self.position
+  let at = self.position()
   if !is_identifier_start(self.peek()) {
     self.reject(UnexpectedToken, "expected an object key")
   }
@@ -346,7 +364,7 @@ fn Cursor::read_key(
   while is_identifier_continue(self.peek()) {
     self.bump()
   }
-  let key = self.span(at.offset, self.position.offset)
+  let key = self.span(at.offset, self.offset)
   out.write_char('"')
   out.write_view(key)
   out.write_char('"')
@@ -426,21 +444,18 @@ fn Cursor::read_hex_number(
   at : SourcePosition,
   negative : Bool,
 ) -> Unit raise RepairFault {
-  self.advance(self.position.offset + 2)
-  let start = self.position.offset
+  self.advance(self.offset + 2)
+  let start = self.offset
   while hex_digit(self.peek()) >= 0 {
     self.bump()
-    if self.position.offset - start > 1024 {
+    if self.offset - start > 1024 {
       self.reject(InvalidNumber, "hexadecimal integer exceeds 1024 digits", at~)
     }
   }
-  if start == self.position.offset || invalid_number_suffix(self.peek()) {
+  if start == self.offset || invalid_number_suffix(self.peek()) {
     self.reject(InvalidNumber, "invalid hexadecimal integer", at~)
   }
-  let replacement = decimal_from_hex(
-    self.span(start, self.position.offset),
-    negative,
-  )
+  let replacement = decimal_from_hex(self.span(start, self.offset), negative)
   out.write_string(replacement)
   self.edit(
     NormalizeLiteral,
@@ -455,7 +470,7 @@ fn Cursor::read_number(
   self : Cursor,
   out : StringBuilder,
 ) -> Unit raise RepairFault {
-  let at = self.position
+  let at = self.position()
   let sign = self.peek()
   if sign == '-' || (self.json5 && sign == '+') {
     self.bump()
@@ -464,7 +479,7 @@ fn Cursor::read_number(
     self.read_hex_number(out, at, sign == '-')
     return
   }
-  let digits_start = self.position.offset
+  let digits_start = self.offset
   let leading_dot = self.json5 && self.peek() == '.'
   if !leading_dot {
     match self.peek() {
@@ -490,7 +505,7 @@ fn Cursor::read_number(
       self.digits()
     }
   }
-  let exponent_start = self.position.offset
+  let exponent_start = self.offset
   if self.peek() is ('e' | 'E') {
     self.bump()
     if self.peek() is ('+' | '-') {
@@ -516,7 +531,7 @@ fn Cursor::read_number(
     if trailing_dot {
       normalized.write_char('0')
     }
-    normalized.write_view(self.span(exponent_start, self.position.offset))
+    normalized.write_view(self.span(exponent_start, self.offset))
     let replacement = normalized.to_string()
     out.write_string(replacement)
     self.edit(
@@ -526,7 +541,7 @@ fn Cursor::read_number(
       replacement~,
     )
   } else {
-    out.write_view(self.span(at.offset, self.position.offset))
+    out.write_view(self.span(at.offset, self.offset))
   }
 }
 
@@ -535,11 +550,11 @@ fn Cursor::read_literal(
   self : Cursor,
   out : StringBuilder,
 ) -> Unit raise RepairFault {
-  let at = self.position
+  let at = self.position()
   while is_identifier_continue(self.peek()) {
     self.bump()
   }
-  let word = self.span(at.offset, self.position.offset)
+  let word = self.span(at.offset, self.offset)
   let replacement = match word {
     "true" | "false" | "null" => {
       out.write_view(word)

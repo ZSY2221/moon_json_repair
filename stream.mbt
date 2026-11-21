@@ -88,6 +88,25 @@ fn RepairStream::observe(self : RepairStream, unit : Char) -> Unit {
 }
 
 ///|
+// Ordinary string units leave the framing state untouched. Only quotes,
+// escapes and line breaks need to pass through observe one at a time.
+fn plain_string_end(view : StringView, start : Int32, quote : Char) -> Int32 {
+  let mut end = start
+  let delimiter = quote.to_int()
+  while end < view.length() {
+    let unit = view[end].to_int()
+    if unit == delimiter ||
+      unit == '\\'.to_int() ||
+      unit == '\r'.to_int() ||
+      unit == '\n'.to_int() {
+      break
+    }
+    end += 1
+  }
+  end
+}
+
+///|
 /// Append a chunk atomically. On overflow the previously accepted prefix
 /// remains available to preview, extend, or reset.
 pub fn RepairStream::push(
@@ -106,8 +125,23 @@ pub fn RepairStream::push(
   }
   self.buffer.write_string(chunk)
   let view = chunk[:]
-  for index in 0..<view.length() {
-    self.observe(char_at(view, index))
+  let mut index = 0
+  while index < view.length() {
+    let end = match self.scan.mode {
+      FrameString(quote) if !self.scan.escaped && self.stable_offset == 0 =>
+        plain_string_end(view, index, quote)
+      _ => index
+    }
+    if end == index {
+      self.observe(char_at(view, index))
+      index += 1
+    } else {
+      let units = end - index
+      self.size += units
+      self.column += units
+      self.after_cr = false
+      index = end
+    }
   }
   Ok(())
 }

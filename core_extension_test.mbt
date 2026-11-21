@@ -418,6 +418,19 @@ test "stream tracks line comments and split carriage-return line feeds" {
 }
 
 ///|
+test "stream counts separate line breaks around an ordinary UTF-16 text run" {
+  let stream = @json_repair.RepairStream::new()
+  for chunk in ["[\"\r", "🌙 text", "\n\"]"] {
+    assert_eq(stream.push(chunk), Ok(()))
+  }
+  let status = stream.status()
+  assert_eq(status.position, { offset: 13, line: 3, column: 3, })
+  assert_eq(status.stable_offset, 13)
+  assert_true(status.stable)
+  assert_eq(stream.finalize(), @json_repair.repair("[\"\r🌙 text\n\"]"))
+}
+
+///|
 test "stream position remains unchanged after an oversized chunk" {
   let defaults = @json_repair.RepairLimits::default()
   let stream = @json_repair.RepairStream::new(limits={

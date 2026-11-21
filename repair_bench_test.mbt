@@ -61,3 +61,30 @@ test "repair and validate a truncated payment tool call" (bench : @bench.T) {
     }
   })
 }
+
+///|
+test "hot text payload benchmarks" (bench : @bench.T) {
+  let ascii = "{\"message\":\"" + "text".repeat(25_000)
+  let rows = "MoonBit \u{1F319} agent output\\n".repeat(4_100)
+  let escaped = "{\"message\":\"" + rows
+  for (name, input) in [("text-ascii", ascii), ("text-escaped", escaped)] {
+    let expected = @json_repair.repair(input).unwrap()
+    guard expected.edits.length() == 2 else {
+      abort("fixture must require two closing edits")
+    }
+    bench.bench(name~, () => bench.keep(@json_repair.repair(input)))
+  }
+}
+
+///|
+test "incremental checkpoint benchmarks" (bench : @bench.T) {
+  let shard = "MoonBit tool output \u{1F319}: 9007199254740993"
+  bench.bench(name="push-only-2000", () => {
+    let stream = @json_repair.RepairStream::new()
+    stream.push("{\"message\":\"").unwrap()
+    for _ in 0..<2000 {
+      stream.push(shard).unwrap()
+    }
+    bench.keep(stream.status())
+  })
+}
