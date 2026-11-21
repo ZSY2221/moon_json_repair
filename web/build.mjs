@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 const options = { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" };
+const manifest = readFileSync(new URL("../moon.mod", import.meta.url), "utf8");
+const version = manifest.match(/^version[ \t]*=[ \t]*"([^"]+)"[ \t]*\r?$/m)?.[1];
+if (!version) throw new Error("The playground build requires a module version in moon.mod.");
 
 function artifact(target) {
   const args = ["build", "cmd/playground", "--target", target, "--release", "--deny-warn", "--output-json"];
@@ -36,9 +39,9 @@ const bytes = (payload) => ({ raw: payload.length, gzip: gzipSync(payload, { lev
 const sizes = { js: bytes(js), wasm: bytes(wasm) };
 // Classic scripts load from file:// as well as a web origin. Bundle the binary
 // once, with no runtime fetch, MIME requirement, dependency, or server helper.
-const embedded = header + "globalThis.moonWasmBuild = {\n  sizes: " + JSON.stringify(sizes) +
+const embedded = header + "globalThis.moonWasmBuild = {\n  version: " + JSON.stringify(version) + ",\n  sizes: " + JSON.stringify(sizes) +
   ",\n  base64: \"" + wasm.toString("base64") + "\",\n};\n";
 writeFileSync(new URL("engine.js", import.meta.url), js);
 writeFileSync(new URL("engine-wasm.js", import.meta.url), embedded);
-console.log(JSON.stringify({ artifacts: sizes, wasmCarrier: bytes(Buffer.from(embedded)) }));
+console.log(JSON.stringify({ version, artifacts: sizes, wasmCarrier: bytes(Buffer.from(embedded)) }));
 console.log("Built web/engine.js and web/engine-wasm.js from the MoonBit playground package.");

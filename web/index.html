@@ -4,26 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090c17">
-  <meta name="description" content="Stream incomplete tool calls through MoonBit, inspect repair and schema edits, and export lossless reports.">
+  <meta data-i18n-description name="description" content="Stream incomplete tool calls through MoonBit, inspect repair and schema edits, and export lossless reports.">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./style.css">
   <script defer src="./engine.js"></script>
   <script defer src="./engine-wasm.js"></script>
+  <script defer src="./i18n.js"></script>
   <script defer src="./examples.js"></script>
   <script defer src="./json-view.js"></script>
   <script defer src="./lab-tools.js"></script>
+  <script defer src="./arena.js"></script>
   <script defer src="./app.js"></script>
-  <title>LLM Stream Repair Lab · MoonBit</title>
+  <title data-i18n>LLM Stream Repair Lab · MoonBit</title>
 </head>
 <body>
   <header class="site-header">
     <div class="shell header-inner">
-      <a class="wordmark" href="./index.html" aria-label="Moon JSON Repair lab home"><span class="logo" aria-hidden="true">{ }</span> moon<span>_</span>json<span>_</span>repair</a>
+      <a class="wordmark" href="./index.html" data-i18n-aria aria-label="Moon JSON Repair lab home"><span class="logo" aria-hidden="true">{ }</span> moon<span>_</span>json<span>_</span>repair</a>
       <div class="engine-picker">
-        <span class="local"><span aria-hidden="true"></span> Local engine</span>
-        <label class="sr-only" for="engine">Repair engine</label>
+        <span class="local"><span aria-hidden="true"></span> <span data-i18n>Local engine</span></span>
+        <label class="sr-only" for="engine" data-i18n>Repair engine</label>
         <select id="engine"><option value="js">MoonBit JS</option><option id="engine-wasm-option" value="wasm" disabled>Wasm GC</option></select>
-        <span class="sr-only" id="engine-status" role="status">Checking Wasm GC support</span>
+        <span class="sr-only" id="engine-status" role="status" data-i18n>Checking Wasm GC support</span>
+        <div class="language-picker" role="group" aria-label="Interface language" data-i18n-aria>
+          <button type="button" id="lang-zh" lang="zh-CN" aria-pressed="false">中文</button>
+          <button type="button" id="lang-en" lang="en" aria-pressed="true">EN</button>
+        </div>
       </div>
     </div>
   </header>
@@ -31,70 +37,82 @@
   <main class="shell">
     <section class="hero" aria-labelledby="title">
       <div class="orbit" aria-hidden="true"><i></i><b></b><span></span></div>
-      <h1 id="title">LLM Stream <em>Repair Lab</em></h1>
-      <p>Replay a tool call token by token, inspect each repair, and retry with feedback from your schema.</p>
+      <h1 id="title"><span data-i18n>LLM Stream</span> <em data-i18n>Repair Lab</em></h1>
+      <p data-i18n>Replay a tool call token by token, inspect each repair, and retry with feedback from your schema.</p>
+      <ul class="capability-bar" aria-label="Workspace capabilities" data-i18n-aria>
+        <li id="capability-engine">Current engine · MoonBit JS</li>
+        <li data-i18n>Wasm GC / JS / Native · zero dependencies</li>
+        <li><a href="#latency-heading" data-i18n>50 KB incremental benchmark</a></li>
+        <li><a href="#sample-mcp" data-i18n>MCP firewall</a></li>
+        <li><a href="#chaos-heading" data-i18n>Chaos Arena</a></li>
+      </ul>
     </section>
 
-    <section class="workspace" aria-label="JSON repair workspace">
+    <section class="workspace" data-i18n-aria aria-label="JSON repair workspace">
       <div class="samples">
-        <span class="toolbar-label" id="samples-label">Test inputs</span>
-        <div class="sample-list" id="samples" role="group" aria-labelledby="samples-label"></div>
+        <span class="toolbar-label" id="samples-label" data-i18n>Test inputs</span>
+        <div class="sample-groups" id="samples" role="group" aria-labelledby="samples-label"></div>
+        <p id="sample-description" class="sample-description"></p>
+        <a class="demo-benchmark" href="#benchmark-label" data-i18n>Compare 10,000 runs</a>
       </div>
 
       <div class="control-deck">
-        <div class="transport" role="group" aria-label="Simulated token stream">
-          <button class="stream-button" id="stream" type="button"><span class="play-icon" aria-hidden="true"></span><span id="stream-label">模拟 LLM 实时流式输出</span></button>
-          <button class="text-button control-button" id="step" type="button" aria-label="Step one simulated token">Step</button>
-          <button class="text-button control-button" id="replay" type="button" aria-label="Replay stream">Replay</button>
-          <label class="sr-only" for="speed">Simulated token speed</label>
+        <div class="transport" role="group" data-i18n-aria aria-label="Simulated token stream">
+          <button class="stream-button" id="stream" type="button"><span class="play-icon" aria-hidden="true"></span><span id="stream-label" data-i18n>Simulate LLM stream</span></button>
+          <button class="text-button control-button" id="step" type="button" data-i18n-aria aria-label="Step one simulated token" data-i18n>Step</button>
+          <button class="text-button control-button" id="replay" type="button" data-i18n-aria aria-label="Replay stream" data-i18n>Replay</button>
+          <label class="sr-only" for="speed" data-i18n>Simulated token speed</label>
           <select id="speed"><option value="30">30 tok/s</option><option value="60" selected>60 tok/s</option><option value="120">120 tok/s</option></select>
         </div>
-        <div class="mode-switches" role="group" aria-label="Repair options">
-          <label><input id="enable-json5" type="checkbox"> JSON5 numbers</label>
-          <label><input id="enable-coercion" type="checkbox"> Schema coercion</label>
-          <label><input id="enable-extraction" type="checkbox"> Extract calls</label>
-          <label><input id="enable-ignore-think" type="checkbox"> 忽略 &lt;think&gt; 推理块</label>
-          <label><input id="enable-mcp" type="checkbox"> MCP guard</label>
+        <div class="mode-switches" role="group" data-i18n-aria aria-label="Repair options">
+          <label><input id="enable-json5" type="checkbox"> <span data-i18n>JSON5 numbers</span></label>
+          <label><input id="enable-coercion" type="checkbox"> <span data-i18n>Schema coercion</span></label>
+          <label><input id="enable-semantic" type="checkbox"> <span data-i18n>Semantic coercion</span></label>
+          <label><input id="enable-extraction" type="checkbox"> <span data-i18n>Extract calls</span></label>
+          <label><input id="enable-ignore-think" type="checkbox"> <span data-i18n>Ignore &lt;think&gt; reasoning</span></label>
+          <label><input id="enable-mcp" type="checkbox"> <span data-i18n>MCP guard</span></label>
+          <label><input id="enable-diagnostics" type="checkbox"> <span data-i18n>Source diagnostics</span></label>
         </div>
       </div>
 
-      <div id="stream-instrument" class="stream-instrument" aria-label="Incremental stream status">
-        <span id="stream-count">Ready · simulated tokens</span>
-        <progress id="stream-progress" aria-label="Stream progress" max="1" value="0"></progress>
+      <div id="stream-instrument" class="stream-instrument" data-i18n-aria aria-label="Incremental stream status">
+        <span id="stream-count" data-i18n>Ready · simulated tokens</span>
+        <progress id="stream-progress" data-i18n-aria aria-label="Stream progress" max="1" value="0"></progress>
         <span id="stream-stack">Depth 0 · stack ∅</span>
-        <span id="stream-boundary">No checkpoint</span>
+        <span id="stream-boundary" data-i18n>No checkpoint</span>
       </div>
 
       <div class="block-picker" id="block-picker" hidden>
-        <span class="toolbar-label" id="blocks-label">Extracted blocks</span>
+        <span class="toolbar-label" id="blocks-label" data-i18n>Extracted blocks</span>
         <div class="sample-list" id="blocks" role="group" aria-labelledby="blocks-label"></div>
       </div>
 
       <div class="editor-grid">
         <div class="editor-card">
           <div class="panel-heading">
-            <div class="panel-title"><span class="heading-icon" aria-hidden="true">›_</span><h2 id="source-label">Model output</h2></div>
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">›_</span><h2 id="source-label" data-i18n>Model output</h2></div>
             <span class="panel-meta" id="source-meta"></span>
           </div>
           <div class="editor-body source-body">
             <div class="gutter" id="source-gutter" aria-hidden="true"></div>
             <div class="source-entry">
               <pre class="source-marking" id="source-marking" aria-hidden="true"></pre>
-              <textarea id="source" aria-labelledby="source-label" placeholder="Paste or type a tool call…" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+              <textarea id="source" aria-labelledby="source-label" data-i18n-placeholder placeholder="Paste or type a tool call…" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
             </div>
           </div>
-          <div class="editor-foot"><span id="source-state">Editable input</span><span>UTF-16 positions</span></div>
+          <div class="editor-foot"><span id="source-state" data-i18n>Editable input</span><span data-i18n>UTF-16 positions</span></div>
         </div>
 
         <div class="editor-card output-card">
           <div class="panel-heading">
-            <div class="output-tabs" role="tablist" aria-label="Repair output">
-              <button id="output-label" type="button" role="tab" aria-controls="result-panel" aria-selected="true">Repaired JSON</button>
-              <button id="trace-tab" type="button" role="tab" aria-controls="trace-panel" aria-selected="false" tabindex="-1">Live patches</button>
+            <div class="output-tabs" role="tablist" data-i18n-aria aria-label="Repair output">
+              <button id="output-label" type="button" role="tab" aria-controls="result-panel" aria-selected="true" data-i18n>Repaired JSON</button>
+              <button id="trace-tab" type="button" role="tab" aria-controls="trace-panel" aria-selected="false" tabindex="-1" data-i18n>Live patches</button>
+              <button id="duel-tab" type="button" role="tab" aria-controls="duel-panel" aria-selected="false" tabindex="-1"><span aria-hidden="true">⚡</span> <span data-i18n>Live UI Duel</span></button>
             </div>
             <div class="editor-actions">
-              <button class="text-button" id="copy" type="button" disabled><span class="copy-icon" aria-hidden="true"></span><span id="copy-label">Copy JSON</span></button>
-              <button class="text-button export-button" id="download" type="button" disabled>Download Lossless Report <span>(.json)</span></button>
+              <button class="text-button" id="copy" type="button" disabled><span class="copy-icon" aria-hidden="true"></span><span id="copy-label" data-i18n>Copy JSON</span></button>
+              <button class="text-button export-button" id="download" type="button" disabled><span data-i18n>Download Lossless Report</span> <span>(.json)</span></button>
             </div>
           </div>
           <div class="editor-body output-body" id="result-panel" role="tabpanel" aria-labelledby="output-label">
@@ -103,24 +121,54 @@
           </div>
           <div id="trace-panel" class="trace-panel" role="tabpanel" aria-labelledby="trace-tab" tabindex="0" hidden>
             <section class="trace-fields" aria-labelledby="fields-label">
-              <h3 id="fields-label">Tool arguments</h3>
-              <p class="trace-empty" id="fields-empty">Play a stream to inspect open and sealed fields.</p>
+              <h3 id="fields-label" data-i18n>Tool arguments</h3>
+              <p class="trace-empty" id="fields-empty" data-i18n>Play a stream to inspect open and sealed fields.</p>
               <ul class="field-list" id="fields"></ul>
             </section>
             <section class="trace-operations" aria-labelledby="patches-label">
-              <div class="trace-heading"><h3 id="patches-label">RFC 6902 operations</h3><span id="patch-count"></span></div>
-              <p class="trace-empty" id="patches-empty">Patches will appear as the repaired value changes.</p>
+              <div class="trace-heading"><h3 id="patches-label" data-i18n>RFC 6902 operations</h3><span id="patch-count"></span></div>
+              <p class="trace-empty" id="patches-empty" data-i18n>Patches will appear as the repaired value changes.</p>
               <ol class="patch-list" id="patches"></ol>
             </section>
+          </div>
+          <div id="duel-panel" class="duel-panel" role="tabpanel" aria-labelledby="duel-tab" hidden>
+            <div class="duel-controls">
+              <label class="sr-only" for="duel-fixture" data-i18n>Duel scenario</label>
+              <select id="duel-fixture">
+                <option value="travel" data-i18n>Travel booking</option>
+                <option value="checkout" data-i18n>E-commerce checkout</option>
+                <option value="write" data-i18n>Write file</option>
+              </select>
+              <button class="stream-button" id="duel-run" type="button" data-i18n>Start duel</button>
+              <span id="duel-progress" role="status" data-i18n>Ready to play</span>
+            </div>
+            <p class="duel-note" data-i18n>The replay starts with a reasoning draft. JSON.parse receives the following JSON chunks. Wasm GC isolates the draft from the full stream and renders each patch.</p>
+            <div class="duel-grid">
+              <section class="duel-lane" aria-labelledby="duel-strict-heading">
+                <div class="duel-lane-head"><h3 id="duel-strict-heading">JSON.parse</h3><span class="duel-status" id="duel-strict-status" data-state="pending" data-i18n>Waiting to start</span></div>
+                <div class="duel-value" id="duel-strict-arguments"></div>
+              </section>
+              <section class="duel-lane duel-wasm" aria-labelledby="duel-wasm-heading">
+                <div class="duel-lane-head"><h3 id="duel-wasm-heading">Wasm GC · RFC 6902</h3><span class="duel-status" id="duel-wasm-status" data-state="pending" data-i18n>Waiting to start</span></div>
+                <div class="duel-value" id="duel-arguments"></div>
+              </section>
+            </div>
+            <div class="duel-metrics"><span id="duel-patch-count" data-count="0"></span><span id="duel-field-lag"></span><span id="duel-engine-time"></span></div>
+            <details class="duel-source"><summary data-i18n>Inspect the raw model stream</summary><pre id="duel-input"></pre></details>
           </div>
           <div class="editor-foot"><span id="repair-state" role="status"></span><span id="elapsed"></span></div>
         </div>
       </div>
 
+      <details class="code-card diagnostic-card" id="diagnostic-card" hidden>
+        <summary data-i18n>Open source diagnostics</summary>
+        <pre id="diagnostic-output" tabindex="0"></pre>
+      </details>
+
       <div class="inspect-grid">
         <section class="inspect-card" aria-labelledby="audit-label">
           <div class="panel-heading">
-            <div class="panel-title"><span class="heading-icon" aria-hidden="true">≡</span><h2 id="audit-label">Repair audit</h2></div>
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">≡</span><h2 id="audit-label" data-i18n>Repair audit</h2></div>
             <span class="status-pill" id="audit-count"></span>
           </div>
           <div class="inspect-content" id="audit-body">
@@ -131,75 +179,98 @@
 
         <section class="inspect-card" aria-labelledby="schema-label">
           <div class="panel-heading">
-            <div class="panel-title"><span class="heading-icon" aria-hidden="true">✓</span><h2 id="schema-label">Schema validation</h2></div>
+            <div class="panel-title"><span class="heading-icon" aria-hidden="true">✓</span><h2 id="schema-label" data-i18n>Schema validation</h2></div>
             <span class="status-pill" id="schema-state" role="status"></span>
           </div>
           <div class="inspect-content" id="schema-body">
             <p class="schema-summary" id="schema-summary"></p>
             <ul class="schema-errors" id="schema-errors"></ul>
             <details>
-              <summary id="schema-editor-label">Edit schema</summary>
+              <summary id="schema-editor-label" data-i18n>Edit schema</summary>
               <label class="sr-only" for="schema" id="schema-input-label">JSON Schema</label>
-              <textarea id="schema" placeholder="Leave blank to skip validation" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+              <textarea id="schema" data-i18n-placeholder placeholder="Leave blank to skip validation" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
             </details>
           </div>
         </section>
       </div>
 
       <section class="retry-card" id="retry-card" aria-labelledby="retry-label" hidden>
-        <div class="panel-heading"><div class="panel-title"><span class="heading-icon" aria-hidden="true">↻</span><h2 id="retry-label">Agent Retry Prompt</h2></div><button class="text-button" id="copy-retry" type="button">Copy prompt</button></div>
+        <div class="panel-heading"><div class="panel-title"><span class="heading-icon" aria-hidden="true">↻</span><h2 id="retry-label" data-i18n>Agent Retry Prompt</h2></div><button class="text-button" id="copy-retry" type="button" data-i18n>Copy prompt</button></div>
         <pre id="retry-prompt" tabindex="0"></pre>
       </section>
 
       <section class="benchmark" aria-labelledby="benchmark-label">
-        <div class="benchmark-info"><h2 id="benchmark-label">In-browser benchmark</h2><p>10,000 attempts per engine · truncated tool call</p><p id="bench-ratio"></p></div>
+        <div class="benchmark-info"><h2 id="benchmark-label" tabindex="-1" data-i18n>In-browser benchmark</h2><p data-i18n>10,000 attempts per engine · truncated tool call</p><p id="bench-ratio"></p></div>
         <div class="bench-metrics">
-          <div class="bench-result"><span>MoonBit JS</span><strong id="bench-repair">—</strong><small id="bench-repair-detail">Recovery · latency · throughput</small><small id="bench-js-size"></small></div>
-          <div class="bench-result"><span>MoonBit Wasm GC</span><strong id="bench-wasm">—</strong><small id="bench-wasm-detail">Recovery · latency · throughput</small><small id="bench-wasm-size"></small></div>
-          <div class="bench-result"><span>JSON.parse</span><strong id="bench-strict">—</strong><small id="bench-strict-detail">Baseline on the same input</small></div>
+          <div class="bench-result"><span>MoonBit JS</span><strong id="bench-repair">—</strong><small id="bench-repair-detail" data-i18n>Recovery · latency · throughput</small><small id="bench-js-size"></small></div>
+          <div class="bench-result"><span>MoonBit Wasm GC</span><strong id="bench-wasm">—</strong><small id="bench-wasm-detail" data-i18n>Recovery · latency · throughput</small><small id="bench-wasm-size"></small></div>
+          <div class="bench-result"><span>JSON.parse</span><strong id="bench-strict">—</strong><small id="bench-strict-detail" data-i18n>Baseline on the same input</small></div>
         </div>
-        <div class="bench-action"><button class="stream-button" id="benchmark" type="button">⚡ Run 10,000 attempts</button><progress id="bench-progress" aria-label="Benchmark progress" max="10000" value="0"></progress><span id="bench-state" role="status">Measured on this device</span></div>
+        <div class="bench-action"><button class="stream-button" id="benchmark" type="button"><span aria-hidden="true">⚡</span><span data-i18n>Run 10,000 attempts</span></button><progress id="bench-progress" data-i18n-aria aria-label="Benchmark progress" max="10000" value="0"></progress><span id="bench-state" role="status" data-i18n>Measured on this device</span></div>
       </section>
 
       <section class="latency-card" aria-labelledby="latency-heading">
         <div class="panel-heading">
-          <div class="panel-title"><span class="heading-icon" aria-hidden="true">↗</span><h2 id="latency-heading">50 KB stream latency</h2></div>
+          <div class="panel-title"><span class="heading-icon" aria-hidden="true">↗</span><h2 id="latency-heading" tabindex="-1" data-i18n>50 KB stream latency</h2></div>
           <div class="latency-controls">
-            <label class="sr-only" for="latency-chunk">UTF-16 units per chunk</label>
+            <label class="sr-only" for="latency-chunk" data-i18n>UTF-16 units per chunk</label>
             <select id="latency-chunk"><option value="64">64 units</option><option value="256" selected>256 units</option></select>
-            <button class="stream-button" id="latency-run" type="button">Compare preview + Patch</button>
+            <button class="stream-button" id="latency-run" type="button" data-i18n>Compare preview + Patch</button>
           </div>
         </div>
         <div class="latency-body">
-          <p class="latency-intro">Streams a truncated <code>write_file</code> call on the selected engine and checks each snapshot against the whole-prefix reference.</p>
-          <div class="latency-legend"><span>Incremental</span><span>Whole-prefix reference</span><span id="latency-range">Shared scale: µs per chunk</span></div>
+          <p class="latency-intro"><span data-i18n>Streams a truncated</span> <code>write_file</code> <span data-i18n>call on the selected engine and checks each snapshot against the whole-prefix reference.</span></p>
+          <div class="latency-legend"><span data-i18n>Incremental</span><span data-i18n>Whole-prefix reference</span><span id="latency-range" data-i18n>Shared scale: µs per chunk</span></div>
           <svg id="latency-svg" class="latency-svg" viewBox="0 0 720 100" preserveAspectRatio="none" role="img" aria-labelledby="latency-heading">
             <path d="M0 25H720 M0 50H720 M0 75H720" class="latency-grid"></path>
             <polyline id="latency-reference" fill="none" vector-effect="non-scaling-stroke"></polyline>
             <polyline id="latency-incremental" fill="none" vector-effect="non-scaling-stroke"></polyline>
           </svg>
-          <progress id="latency-progress" aria-label="Stream benchmark progress" max="1" value="0"></progress>
-          <p id="latency-state" class="latency-state" role="status">Ready to measure</p>
+          <progress id="latency-progress" data-i18n-aria aria-label="Stream benchmark progress" max="1" value="0"></progress>
+          <p id="latency-state" class="latency-state" role="status" data-i18n>Ready to measure</p>
+        </div>
+      </section>
+
+      <section class="chaos-card" aria-labelledby="chaos-heading">
+        <div class="panel-heading">
+          <div class="panel-title"><span class="heading-icon" aria-hidden="true">∿</span><h2 id="chaos-heading" data-i18n>Chaos Arena</h2></div>
+          <button class="stream-button" id="chaos-run" type="button" data-i18n>Run 1,152 cases</button>
+        </div>
+        <div class="chaos-body">
+          <p class="duel-note" data-i18n>Wasm GC processes seeded truncations, Unicode boundaries, reasoning blocks, quotes, and deep nesting in small batches.</p>
+          <div class="chaos-metrics">
+            <div><span data-i18n>Cases</span><strong id="chaos-processed">0</strong></div>
+            <div><span data-i18n>Valid repairs</span><strong id="chaos-repaired">0</strong></div>
+            <div><span data-i18n>Safe refusals</span><strong id="chaos-refused">0</strong></div>
+            <div><span data-i18n>Bridge failures</span><strong id="chaos-panics">0</strong></div>
+            <div><span data-i18n>Engine throughput</span><strong id="chaos-throughput">—</strong></div>
+          </div>
+          <progress id="chaos-progress" data-i18n-aria aria-label="Chaos Arena progress" value="0" max="1152"></progress>
+          <p id="chaos-status" role="status" data-state="ready" data-i18n>Ready to run</p>
+          <details id="chaos-diagnostic-card" class="chaos-diagnostic" hidden>
+            <summary data-i18n>Inspect a refusal</summary>
+            <pre id="chaos-diagnostic" tabindex="0"></pre>
+          </details>
         </div>
       </section>
 
       <details class="code-card" id="code-card">
-        <summary>Run this configuration locally</summary>
+        <summary data-i18n>Run this configuration locally</summary>
         <div class="code-grid">
           <section aria-labelledby="moonbit-code-heading">
-            <div class="code-toolbar"><h3 id="moonbit-code-heading">MoonBit</h3><button class="text-button" id="copy-moonbit" type="button">Copy MoonBit</button></div>
+            <div class="code-toolbar"><h3 id="moonbit-code-heading">MoonBit</h3><button class="text-button" id="copy-moonbit" type="button" data-i18n>Copy MoonBit</button></div>
             <pre id="moonbit-code" tabindex="0"></pre>
           </section>
           <section aria-labelledby="cli-code-heading">
-            <div class="code-toolbar"><h3 id="cli-code-heading">Native CLI · PowerShell</h3><button class="text-button" id="copy-cli" type="button">Copy PowerShell</button></div>
+            <div class="code-toolbar"><h3 id="cli-code-heading" data-i18n>Native CLI · PowerShell</h3><button class="text-button" id="copy-cli" type="button" data-i18n>Copy PowerShell</button></div>
             <pre id="cli-code" tabindex="0"></pre>
           </section>
         </div>
       </details>
     </section>
 
-    <noscript><p>Enable JavaScript to use the local MoonBit engine.</p></noscript>
-    <footer><span>Built with MoonBit</span><span>Apache-2.0</span></footer>
+    <noscript><p data-i18n>Enable JavaScript to use the local MoonBit engine.</p></noscript>
+    <footer><span data-i18n>Built with MoonBit</span><span>Apache-2.0</span></footer>
   </main>
 </body>
 </html>

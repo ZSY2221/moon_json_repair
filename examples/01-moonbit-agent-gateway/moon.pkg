@@ -1,0 +1,5 @@
+import {
+  "ZSY2221/json_repair" @repair,
+}
+
+pkgtype(kind: "executable")

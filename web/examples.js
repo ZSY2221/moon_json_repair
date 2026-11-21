@@ -47,6 +47,8 @@ function truncatedMcpCall(argumentsText) {
 const examples = [
   {
     label: "Stream cut",
+    group: "stream",
+    description: "Recover a tool call that ends inside a string.",
     input: `{
   "tool": "create_ticket",
   "args": {
@@ -61,6 +63,8 @@ const examples = [
   },
   {
     label: "Markdown & prose",
+    group: "stream",
+    description: "Extract the JSON payload from surrounding prose and a code fence.",
     input: "Here's the tool call I would use.\n\n```json\n" +
       '{"tool":"search_docs","args":{"query":"MoonBit JSON repair","limit":3}}\n```\n' +
       "I'll wait for those results.",
@@ -71,6 +75,8 @@ const examples = [
   },
   {
     label: "Python & JS literals",
+    group: "stream",
+    description: "Normalize non-JSON literals such as True, None, and undefined.",
     input: `{"tool":"set_preferences","args":{
   "daily_email": True,
   "sms": False,
@@ -86,6 +92,8 @@ const examples = [
   },
   {
     label: "Comments",
+    group: "stream",
+    description: "Remove comments and trailing commas without changing payload values.",
     input: `{
   "tool": "fetch_url",
   "args": {
@@ -101,6 +109,8 @@ const examples = [
   },
   {
     label: "Keys & commas",
+    group: "stream",
+    description: "Repair bare keys, single quotes, missing commas, and line breaks.",
     input: `{
   tool: 'send_notice'
   args: {
@@ -116,6 +126,8 @@ Thanks for your patience',
   },
   {
     label: "Schema rejection",
+    group: "precision",
+    description: "Inspect rejected payment arguments and the retry prompt.",
     input: `{
   "tool": "record_payment",
   "args": {
@@ -134,7 +146,33 @@ Thanks for your patience',
 
 const labFixtures = [
   {
+    label: "Travel booking duel",
+    group: "stream",
+    description: "Watch fields appear from Wasm GC patches while JSON.parse waits for the last chunk.",
+    input: '{"tool":"plan_trip","args":{"title":"Weekend in Osaka","destination":"Osaka","budget":680,"risk":"low","completion":100}}',
+    modes: { duel: "travel" },
+  },
+  {
+    label: "Semantic normalization",
+    group: "precision",
+    description: "Normalize a field name and enum spelling while preserving the exact amount.",
+    input: "{tool:'record_payment',args:{userName:'Ada',currency:' usd ',amount:'9007199254740993'}}",
+    schema: toolSchema("record_payment", {
+      type: "object",
+      required: ["user_name", "currency", "amount"],
+      properties: {
+        user_name: { type: "string" },
+        currency: { enum: ["USD", "EUR"] },
+        amount: { type: "integer" },
+      },
+      additionalProperties: false,
+    }),
+    modes: { coerce: true, semantic: true, diagnostics: true },
+  },
+  {
     label: "Patch stream",
+    group: "stream",
+    description: "Watch RFC 6902 operations and field sealing as the call grows.",
     modes: { ignoreThink: true },
     input: [
       "<think>",
@@ -153,6 +191,8 @@ const labFixtures = [
   },
   {
     label: "Precision & coercion",
+    group: "precision",
+    description: "Preserve integers beyond JavaScript precision and coerce argument types by schema.",
     modes: { json5: true, coerce: true },
     input: [
       '{',
@@ -174,6 +214,8 @@ const labFixtures = [
   },
   {
     label: "Multiple calls",
+    group: "stream",
+    description: "Locate and repair each JSON tool call in a mixed response.",
     modes: { extract: true },
     input: [
       "First, search the project docs:",
@@ -189,7 +231,9 @@ const labFixtures = [
     ].join("\n"),
   },
   {
-    label: "推理草稿 + 截断调用",
+    label: "Reasoning draft + truncated calls",
+    group: "stream",
+    description: "Isolate reasoning while retaining literal tags in argument strings.",
     modes: { extract: true, ignoreThink: true },
     input: [
       "<ThInK>",
@@ -217,18 +261,24 @@ const labFixtures = [
   },
   {
     label: "50 KB write_file",
+    group: "latency",
+    description: "Replay a 50 KB code argument and compare incremental and full-prefix latency.",
     input: writeFileInput,
     schema: toolSchema("write_file", writeFileSchema),
     transport: 256,
   },
   {
     label: "MCP tools/call",
+    group: "mcp",
+    description: "Repair and validate a JSON-RPC tool call while preserving its exact ID.",
     input: truncatedMcpCall("{path:'notes.md', content:'hello from MoonBit'"),
     schema: mcpRegistry,
     modes: { mcp: true },
   },
   {
     label: "MCP invalid params",
+    group: "mcp",
+    description: "Inspect a structured -32602 response and its retry guidance.",
     input: truncatedMcpCall("{path:'', content:17"),
     schema: mcpRegistry,
     modes: { mcp: true, coerce: true },

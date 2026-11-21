@@ -1,0 +1,28 @@
+{
+  "name": "@zsy2221/json-repair-wasm",
+  "version": "0.5.0",
+  "description": "MoonBit JSON repair, streaming JSON Patch, and MCP validation for JavaScript and TypeScript.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZSY2221/moon_json_repair.git",
+    "directory": "packages/json-repair-wasm"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    },
+    "./engine.wasm": "./engine.wasm"
+  },
+  "files": ["index.mjs", "index.d.ts", "index.d.mts", "engine.wasm", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "node build.mjs",
+    "test": "node --test index.test.mjs"
+  }
+}

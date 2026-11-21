@@ -190,7 +190,7 @@ function makeVisualAudit(source, block) {
   const edits = block.report.edits.map((edit, index) => ({
     label: edit.action,
     kind: edit.kind,
-    location: "L" + edit.position.line + ":C" + edit.position.column,
+    position: edit.position,
     source: { start: edit.position.offset, end: edit.end_offset },
     output: mapping?.ranges[index] ? remapOutput(mapping.ranges[index], before, after) : null,
   }));
@@ -206,7 +206,7 @@ function makeVisualAudit(source, block) {
     edits.push({
       label: change.path,
       kind: "schema_coerce · " + change.kind,
-      location: "Schema",
+      isCoercion: true,
       source: span || null,
       output: output || null,
     });

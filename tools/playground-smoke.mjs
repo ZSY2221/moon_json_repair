@@ -45,7 +45,7 @@ try {
     try { await access(edge); executablePath = edge; } catch { /* Use bundled Chromium. */ }
   }
   browser = await chromium.launch({ executablePath, headless: true });
-  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, acceptDownloads: true });
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, acceptDownloads: true, locale: "en-US" });
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const page = await context.newPage();
   const errors = [];
@@ -82,7 +82,8 @@ try {
   });
   assert.deepEqual(wasmAbi.magic, [0, 97, 115, 109]);
   assert.deepEqual(wasmAbi.imports, []);
-  for (const entry of ["moonLabRun", "moonLabStreamStart", "moonLabStreamPush", "moonLabStreamView", "moonLabRepairOnly"]) {
+  for (const entry of ["moonLabRun", "moonLabStreamStart", "moonLabStreamPush", "moonLabStreamView", "moonLabRepairOnly",
+    "moonLabRunWithOptions", "moonLabStreamViewWithOptions"]) {
     assert.ok(wasmAbi.exports.includes(entry), "Missing Wasm GC function " + entry);
   }
   assert.equal(await page.locator("#enable-ignore-think").isChecked(), false);
@@ -136,9 +137,9 @@ try {
   await page.locator("#enable-extraction").check();
   await wait("#blocks", "Block 3");
 
-  const reasoningPreset = "推理草稿 + 截断调用";
+  const reasoningPreset = "Reasoning draft + truncated calls";
   const thinkSwitch = page.locator("#enable-ignore-think");
-  const ignoredThink = page.locator("#audit button").filter({ hasText: "ignore_think_block" });
+  const ignoredThink = page.locator('#audit button[data-kind="ignore_think_block"]');
   await sample(reasoningPreset);
   const exactBody = await outputHas("9007199254740993");
   await wait("#schema-state", "Pass");
@@ -225,7 +226,7 @@ try {
   assert.equal(healed.args.approved, true);
   assert.deepEqual(healed.args.tags, ["invoice"]);
 
-  const hex = page.locator("#audit button").filter({ hasText: "hex_int_to_decimal" });
+  const hex = page.locator('#audit button[data-kind="hex_int_to_decimal"]');
   await hex.click();
   assert.equal(await page.locator("#source-marking mark").textContent(), "0x20000000000001");
   assert.equal(await page.locator("#output mark").textContent(), "9007199254740993");
@@ -260,6 +261,7 @@ try {
 
   const jsRuns = await page.evaluate(() => window.engineRunsForBlockSwitch);
   await page.locator("#engine").selectOption("wasm");
+  await wait("#capability-engine", "Wasm GC");
   await sample("Patch stream");
   await outputHas("9007199254740993");
   await wait("#schema-state", "Pass");
@@ -361,7 +363,77 @@ try {
   assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n"),
     await page.locator("#cli-code").textContent());
 
-  const expectedAssets = ["", "style.css", "engine.js", "engine-wasm.js", "examples.js", "json-view.js", "lab-tools.js", "app.js"];
+  await sample("Stream cut");
+  if (!(await page.locator("#schema").isVisible())) await page.locator("#schema-editor-label").click();
+  await page.locator("#schema").fill('{"type":"object","required":["user_name","currency","amount"],"properties":{"user_name":{"type":"string"},"currency":{"enum":["USD","EUR"]},"amount":{"type":"integer"}}}');
+  await page.locator("#source").fill('{"userName":"Ada","currency":" usd ","amount":"9007199254740993"}');
+  await page.locator("#enable-coercion").check();
+  await page.locator("#enable-semantic").check();
+  await page.locator("#enable-diagnostics").check();
+  await wait("#output", "9007199254740993");
+  await wait("#schema-state", "Pass");
+  assert.match(await page.locator("#output").textContent(), /"user_name"\s*:\s*"Ada"/u);
+  assert.match(await page.locator("#output").textContent(), /"currency"\s*:\s*"USD"/u);
+  const semanticDownloadPending = page.waitForEvent("download");
+  await page.locator("#download").click();
+  const semanticDownload = await semanticDownloadPending;
+  assert.match(await readFile(await semanticDownload.path(), "utf8"), /"amount":9007199254740993/u);
+  await page.locator("#source").fill('{\n  "user_name": "星球🌙",\n  "currency": "USD",\n  "amount": "wrong"\n}');
+  await wait("#schema-state", "Fail");
+  await page.locator("#diagnostic-card > summary").click();
+  await wait("#diagnostic-output", "error[type]");
+  assert.match(await page.locator("#diagnostic-output").textContent(), /1\s*\|[^\n]*"amount":"wrong"/u);
+  assert.match(await page.locator("#diagnostic-output").textContent(), /\^{5,}/u);
+  await page.locator("#lang-zh").click();
+  await wait("#diagnostic-output", "错误[type]");
+  assert.match(await page.locator("#diagnostic-output").textContent(), /\$\.amount/u);
+  await page.locator("#lang-en").click();
+  await wait("#diagnostic-output", "error[type]");
+
+  await page.evaluate(() => {
+    window.duelFrames = [];
+    const strict = document.getElementById("duel-strict-status");
+    const fields = document.getElementById("duel-arguments");
+    const counter = document.getElementById("duel-patch-count");
+    const source = document.getElementById("duel-input");
+    const watch = new MutationObserver(() => {
+      window.duelFrames.push({
+        strict: strict.dataset.state,
+        sealed: fields.querySelectorAll('[data-sealed="true"]').length,
+        patches: Number(counter.dataset.count),
+        raw: source.textContent,
+        visible: fields.textContent,
+      });
+    });
+    watch.observe(document.getElementById("duel-panel"), { childList: true, subtree: true, attributes: true });
+  });
+  await sample("Travel booking duel");
+  assert.equal(await page.locator("#duel-tab").getAttribute("aria-selected"), "true");
+  await page.waitForFunction(() => document.getElementById("duel-progress").dataset.state === "complete", null, { timeout: 45_000 });
+  assert.equal(await page.locator("#duel-strict-status").getAttribute("data-state"), "ready");
+  const duelFrames = await page.evaluate(() => window.duelFrames);
+  assert.ok(duelFrames.some(frame => frame.raw.includes("Draft only") && !frame.raw.includes("</think>") && frame.patches === 0));
+  assert.ok(duelFrames.every(frame => !frame.visible.includes("Draft only")), "The draft must never appear in a business card");
+  assert.match(await page.locator("#duel-input").textContent(), /^<think>\n.*\n<\/think>\n\{"tool":"plan_trip"/u);
+  assert.ok(duelFrames.some(frame => frame.strict === "waiting" && frame.sealed > 0 && frame.patches > 0),
+    "Wasm must show actual sealed arguments and patches while JSON.parse still awaits complete input");
+  assert.ok(Number(await page.locator("#duel-patch-count").getAttribute("data-count")) > 0);
+  assert.match(await page.locator("#duel-field-lag").textContent(), /\d[\d.,]*\s*(?:ms|µs)/u);
+  assert.match(await page.locator("#duel-engine-time").textContent(), /\d[\d.,]*\s*(?:ms|µs)/u);
+
+  await page.locator("#chaos-run").click();
+  await page.waitForFunction(() => document.getElementById("chaos-status").dataset.state === "complete", null, { timeout: 60_000 });
+  const arenaCounts = {};
+  for (const name of ["processed", "repaired", "refused", "panics"]) {
+    arenaCounts[name] = Number((await page.locator("#chaos-" + name).textContent()).replace(/\D/g, ""));
+  }
+  assert.equal(arenaCounts.processed, 1_152);
+  assert.equal(arenaCounts.repaired + arenaCounts.refused, arenaCounts.processed);
+  assert.ok(arenaCounts.repaired > 0 && arenaCounts.refused > 0);
+  assert.equal(arenaCounts.panics, 0);
+  assert.match(await page.locator("#chaos-throughput").textContent(), /[1-9]/u);
+
+  const expectedAssets = ["", "style.css", "engine.js", "engine-wasm.js", "i18n.js", "examples.js", "json-view.js", "lab-tools.js", "arena.js", "app.js"];
   for (const asset of expectedAssets) assert.ok(paths.has(subpath + asset), "Missing " + asset);
   assert.deepEqual(errors, []);
   const narrow = await context.newPage();
@@ -377,7 +449,7 @@ try {
   await narrow.getByText("Run this configuration locally", { exact: true }).click();
   assert.ok(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
 
-  const offline = await browser.newContext({ offline: true });
+  const offline = await browser.newContext({ offline: true, locale: "en-US" });
   const filePage = await offline.newPage();
   filePage.on("pageerror", error => errors.push(error.message));
   filePage.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -387,6 +459,13 @@ try {
   await filePage.locator("#engine").selectOption("wasm");
   await filePage.getByRole("button", { name: "Patch stream", exact: true }).click();
   await filePage.waitForFunction(() => document.getElementById("output").textContent.includes("9007199254740993"));
+  await filePage.locator("#lang-zh").click();
+  assert.equal(await filePage.locator("html").getAttribute("lang"), "zh-CN");
+  assert.match(await filePage.locator("#output-label").textContent(), /\p{Script=Han}/u);
+  assert.match(await filePage.locator("#output").textContent(), /9007199254740993/);
+  await filePage.locator("#duel-tab").click();
+  await filePage.locator("#duel-run").click();
+  await filePage.waitForFunction(() => document.getElementById("duel-progress").dataset.state === "complete", null, { timeout: 45_000 });
   const fallback = await context.newPage();
   fallback.on("pageerror", error => errors.push(error.message));
   fallback.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -395,9 +474,130 @@ try {
   await fallback.waitForFunction(() => document.getElementById("engine-status").textContent.includes("Wasm GC unavailable"));
   assert.equal(await fallback.locator("#engine-wasm-option").isDisabled(), true);
   await fallback.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
+
+  const localizedContext = await browser.newContext({ locale: "zh-TW", viewport: { width: 390, height: 844 }, acceptDownloads: true });
+  await localizedContext.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const localized = await localizedContext.newPage();
+  localized.on("pageerror", error => errors.push(error.message));
+  localized.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  localized.on("requestfailed", request => errors.push("Language test request failed: " + request.url()));
+  localized.on("response", response => {
+    if (response.status() >= 400) errors.push("Language test HTTP " + response.status() + ": " + response.url());
+    if (!response.url().startsWith(site)) errors.push("Language test external request: " + response.url());
+  });
+  await localized.goto(site);
+  const checkLanguage = async (language, locale) => {
+    await localized.waitForFunction(expected => document.documentElement.lang === expected, locale);
+    assert.equal(await localized.locator("#lang-" + language).getAttribute("aria-pressed"), "true");
+    const selectors = [
+      "#stream-label", "#source-label", "#output-label", "#trace-tab", "#audit-label",
+      "#fields-label", "#step", "#replay", "#benchmark", "#latency-run",
+      "#copy-moonbit", "#copy-cli", "#capability-engine", "#sample-stream-label",
+      "#sample-mcp-label", "#sample-latency-label", "#sample-precision-label", "#duel-tab",
+      "#duel-run", "#chaos-heading", "#chaos-run", "#diagnostic-card > summary",
+    ];
+    const labels = await localized.locator(selectors.join(",")).allTextContents();
+    assert.equal(labels.length, selectors.length);
+    for (const label of labels) {
+      assert.ok(label.trim(), "An interactive label must be present");
+      assert.equal(/\p{Script=Han}/u.test(label), language === "zh", "Unexpected language: " + label);
+    }
+  };
+  await checkLanguage("zh", "zh-CN");
+  await localized.locator("#source").fill('{"value":"🌙","id":9007199254740993}');
+  await localized.waitForFunction(() => document.getElementById("output").textContent.includes("9007199254740993"));
+  await localized.locator("#enable-ignore-think").check();
+  await localized.evaluate(() => { window.languageContinuityProbe = true; });
+  const beforeLanguage = await localized.locator("#source").inputValue();
+  await localized.locator("#lang-en").click();
+  await checkLanguage("en", "en");
+  assert.equal(await localized.evaluate(() => window.languageContinuityProbe), true, "Language switching reloaded the document");
+  assert.equal(await localized.locator("#source").inputValue(), beforeLanguage);
+  assert.ok(await localized.locator("#enable-ignore-think").isChecked());
+  assert.match(await localized.locator("#output").textContent(), /9007199254740993/);
+  await localized.goto(site);
+  await checkLanguage("en", "en");
+  assert.equal(await localized.evaluate(() => localStorage.getItem("moon-json-repair-lang")), "en");
+  await localized.goto(site + "?lang=zh");
+  await checkLanguage("zh", "zh-CN");
+  assert.ok(await localized.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  await localized.getByRole("button", { name: "MCP 参数拦截", exact: true }).click();
+  await localized.waitForFunction(() => document.getElementById("output").textContent.includes("-32602"));
+  assert.match(await localized.locator("#schema-state").textContent(), /[\u3400-\u9fff].*-32602/);
+  const preview = await localized.locator("#output").textContent();
+  assert.match(preview, /"id"\s*:\s*9007199254740993/);
+  const previewError = JSON.parse(preview).error;
+  assert.equal(previewError.message, "参数无效");
+  assert.ok(previewError.data.issues.every(({ message }) => /\p{Script=Han}/u.test(message)));
+  assert.doesNotMatch(previewError.data.retry_prompt, /expected string|Unicode code points/u);
+  const downloadedFrame = localized.waitForEvent("download");
+  await localized.locator("#download").click();
+  const originalFrame = await readFile(await (await downloadedFrame).path(), "utf8");
+  assert.match(originalFrame, /"id":9007199254740993(?=[,}])/u);
+  assert.equal(JSON.parse(originalFrame).error.message, "Invalid params");
+  await localized.locator("#copy").click();
+  await localized.waitForFunction(() => document.getElementById("copy-label").textContent === "已复制");
+  assert.equal(await localized.evaluate(() => navigator.clipboard.readText()), originalFrame);
+  await localized.locator("#lang-en").click();
+  await localized.waitForFunction(() => document.getElementById("output").textContent.includes("Invalid params"));
+  await localized.locator("#lang-zh").click();
+  await localized.waitForFunction(() => document.getElementById("output").textContent.includes("参数无效"));
+  await localized.locator("#code-card > summary").click();
+  assert.match(await localized.locator("#cli-code").textContent(), /#[^\n]*[\u3400-\u9fff]/);
+  await localized.goto(site + "?lang=en");
+  await checkLanguage("en", "en");
+
+  await localized.locator("#engine").selectOption("js");
+  await localized.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
+  await localized.evaluate(() => {
+    window.guardEngineCalls = 0;
+    for (const name of ["moonLabRun", "moonLabRunWithOptions"]) {
+      const run = window[name];
+      window[name] = (...args) => {
+        window.guardEngineCalls++;
+        return run(...args);
+      };
+    }
+  });
+  for (const [kind, source] of [
+    ["input_limit", "?".repeat(500_000)],
+    ["depth_limit", "[".repeat(1_000) + "]".repeat(1_000)],
+    ["escape_limit", '{"value":"' + "\\q".repeat(17_000) + '"}'],
+  ]) {
+    await localized.locator("#source").fill(source);
+    await localized.waitForFunction(
+      expected => document.getElementById("source").dataset.inputError === expected, kind, { timeout: 5_000 },
+    );
+    const protectedOutput = JSON.parse(await localized.locator("#output").textContent());
+    assert.equal(protectedOutput.error.kind, kind);
+    assert.equal(await localized.locator("#source").getAttribute("aria-invalid"), "true");
+    assert.ok((await localized.locator("#repair-state").textContent()).trim());
+    assert.ok(await localized.locator("#download").isDisabled());
+    assert.ok(await localized.locator("#benchmark").isEnabled());
+    assert.ok(await localized.locator("#latency-run").isEnabled());
+  }
+  assert.equal(await localized.evaluate(() => window.guardEngineCalls), 0, "Rejected input reached the JS engine");
+  await localized.locator("#lang-zh").click();
+  await checkLanguage("zh", "zh-CN");
+  assert.equal(new URL(localized.url()).searchParams.get("lang"), "zh");
+  const chineseGuard = JSON.parse(await localized.locator("#output").textContent());
+  assert.equal(chineseGuard.error.kind, "escape_limit", "Language switching changed the input guard");
+  assert.match(chineseGuard.error.message, /\p{Script=Han}/u);
+  await localized.locator("#lang-en").click();
+  await checkLanguage("en", "en");
+  await localized.locator("#source").fill("");
+  await localized.waitForFunction(() => document.getElementById("repair-state").textContent.includes("Awaiting input"));
+  await localized.locator("#source").fill("🌙🧪🚀");
+  await localized.waitForFunction(() => document.getElementById("repair-state").textContent.includes("Unable to repair"));
+  assert.ok(await localized.locator("#download").isDisabled());
+  await localized.getByRole("button", { name: "Stream cut", exact: true }).click();
+  await localized.waitForFunction(() => document.getElementById("output").textContent.includes("Investigate checkout timeout"));
+  assert.ok(await localized.locator("#download").isEnabled());
+  assert.notEqual(await localized.locator("#source").getAttribute("aria-invalid"), "true");
+  await localizedContext.close();
   assert.deepEqual(errors, []);
 
-  console.log("Edge/Chromium " + browser.version() + " at " + site + " · 8 local assets · 0 HTTP errors and 0 console errors");
+  console.log("Edge/Chromium " + browser.version() + " at " + site + " · " + expectedAssets.length + " local assets · 0 HTTP errors and 0 console errors");
   console.log("Stream replay, pause, step, finalize, stack, and schema state changes verified.");
   console.log("Three extracted calls, JSON5, schema coercion, exact dual highlights, and retry prompt copy verified.");
   console.log("Think mode: mixed-case tags, literal markers, open and streamed blocks, source projection, and exact download verified.");
@@ -410,7 +610,12 @@ try {
   console.log(await page.locator("#bench-ratio").textContent());
   console.log(streamLatency);
   console.log("MCP tool forwarding, -32602, exact ID download, and clipboard code options verified.");
-  console.log("390px viewport, offline file:// Wasm GC, and JS fallback verified.");
+  console.log("Live UI Duel rendered sealed fields ahead of strict JSON.parse, with measured Patch and timing counters.");
+  console.log("Chaos Arena · " + arenaCounts.processed + " cases · " + arenaCounts.repaired + " repairs · " + arenaCounts.refused + " refusals · " + arenaCounts.panics + " failures");
+  console.log("Semantic coercion, localized compiler-style carets and exact wide integer download verified.");
+  console.log("Chinese/English default and overrides, in-place switching, preference memory, and 390px layout verified.");
+  console.log("Offline file:// bilingual Wasm GC and JS fallback verified.");
+  console.log("500 KiB input, 1,000 nesting levels, malformed escapes, empty input, emoji, and post-rejection recovery verified.");
 } finally {
   if (browser) await browser.close();
   await new Promise(done => server.close(done));

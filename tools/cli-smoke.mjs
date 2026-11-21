@@ -192,6 +192,22 @@ try {
     assert.equal(invalid.schema.errors[0].path, "$.n");
   });
 
+  await scenario("pretty schema diagnostics keep stdout JSON and exact integers", () => {
+    const source = '{\n  "n": -1,\n  "id": 9007199254740993\n}';
+    const result = run(["--schema", schema, "--diagnostic-format", "pretty"], source);
+    assert.equal(result.status, 3, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.schema.errors[0].path, "$.n");
+    assert.match(report.json, /"id"\s*:\s*9007199254740993(?=\s*[,}])/);
+    assert.match(result.stdout, /"id"\s*:\s*9007199254740993(?=\s*[,}])/);
+    const diagnostic = result.stderr.replaceAll("\r\n", "\n");
+    assert.equal(diagnostic, report.schema_diagnostic);
+    assert.match(diagnostic, /^error\[minimum\]:/m);
+    assert.match(diagnostic, /^\s*--> \d+:\d+ \(UTF-16\) \$\.n$/m);
+    assert.match(diagnostic, /^\s*\|\s*\^+/m);
+    assert.doesNotMatch(diagnostic, /\u001b/);
+  });
+
   await scenario("NDJSON stdin continues after syntax and schema failures", () => {
     const result = run(["--ndjson", "--schema", schema], batchText);
     const batch = reports(result, 0);

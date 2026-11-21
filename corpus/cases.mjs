@@ -229,3 +229,16 @@ export const corpus = [
     source: '{"tool":"draft"}{"tool":"execute"}', error: "trailing_content",
   },
 ];
+
+// A 50,000-byte valid write_file frame with repeated quotes and newlines so
+// incremental parsers exercise ordinary code and fragmented JSON escapes.
+export function ecosystemPayload() {
+  const size = 50_000;
+  const frame = content => JSON.stringify({
+    tool: "write_file", args: { path: "src/main.ts", id: 9007199254740993n.toString(), content },
+  }).replace('"id":"9007199254740993"', '"id":9007199254740993');
+  const line = 'export const status = "ready"; // emitted source\n';
+  const count = Math.floor((size - frame("").length) / JSON.stringify(line).slice(1, -1).length);
+  const body = line.repeat(count);
+  return frame(body + " ".repeat(size - frame(body).length));
+}

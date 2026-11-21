@@ -6,17 +6,17 @@ import { basename, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { corpus } from "../corpus/cases.mjs";
+import { corpus, ecosystemPayload } from "../corpus/cases.mjs";
 import { moonString, rfcFixtures } from "./rfc-fixtures.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const options = process.argv.slice(2);
 const wslIndex = options.indexOf("--native-wsl");
 const distribution = wslIndex === -1 ? undefined : options.splice(wslIndex, 2)[1];
-if (options.some(option => !["--json", "--native"].includes(option)) ||
+if (options.some(option => !["--json", "--native", "--sdk", "--stream-bench"].includes(option)) ||
     (wslIndex !== -1 && (!distribution || process.platform !== "win32")) ||
     (options.includes("--native") && process.platform === "win32" && !distribution)) {
-  throw new Error("Usage: node tools/eval-corpus.mjs [--json] [--native (Linux) | --native-wsl DISTRO]");
+  throw new Error("Usage: node tools/eval-corpus.mjs [--json] [--sdk] [--native (Linux) | --native-wsl DISTRO]");
 }
 
 const fixtures = [
@@ -72,15 +72,19 @@ function measure(run, rounds = 25) {
 }
 
 function medianTime(run, rounds) {
+  const ms = medianMilliseconds(run);
+  return { repeat: rounds, usPerInput: Number((ms * 1000 / (rounds * inputs.length)).toFixed(2)),
+    mbPerSecond: Number((rounds * bytesPerBatch / (ms * 1000)).toFixed(2)) };
+}
+
+function medianMilliseconds(run) {
   const durations = [];
   for (let sample = 0; sample < 5; sample++) {
     const start = performance.now();
     run();
     durations.push(performance.now() - start);
   }
-  const ms = durations.sort((left, right) => left - right)[2];
-  return { repeat: rounds, usPerInput: Number((ms * 1000 / (rounds * inputs.length)).toFixed(2)),
-    mbPerSecond: Number((rounds * bytesPerBatch / (ms * 1000)).toFixed(2)) };
+  return durations.sort((left, right) => left - right)[2];
 }
 
 function artifact(content) {
@@ -189,11 +193,14 @@ function nativeEngine() {
       .replace(/^#export_name\([^\n]*\n/gm, "");
     writeFileSync(join(worker, "bridge.mbt"), bridge);
     const rounds = 25;
+    const streamOptions = options.includes("--stream-bench") ? nativeStreamProbe() : undefined;
     const entries = inputs.map((args, index) =>
       index + " => lab_run(" + args.map(arg => typeof arg === "string" ? moonString(arg) : String(arg)).join(", ") + ")");
     writeFileSync(join(worker, "worker.mbt"), [
       "///|", "fn evaluate(index : Int) -> String {", "  match index {", ...entries,
       '    _ => ""', "  }", "}", "///|", "fn main {",
+      ...(streamOptions ? ['  if @env.args().last() == Some("--stream-bench") {',
+        '    stream_bench()', '    return', '  }'] : []),
       '  if @env.args().last() == Some("--benchmark") {',
       "    let mut checksum = 0",
       "    for _ in 0..<" + rounds + " {",
@@ -202,6 +209,7 @@ function nativeEngine() {
       "    for index in 0..<" + inputs.length + " { println(evaluate(index)) }",
       "  }", "}", "",
     ].join("\n"));
+    if (streamOptions) writeFileSync(join(worker, "stream_probe.mbt"), streamOptions.code);
     const args = ["build", "worker", "--target", "native", "--release", "--strip", "--deny-warn", "--output-json"];
     const prefix = distribution ? ["-d", distribution, "--exec"] : [];
     const build = distribution
@@ -215,12 +223,43 @@ function nativeEngine() {
     const results = run([]).split(/\r?\n/).filter(line => line.startsWith("{"));
     assert.equal(results.length, fixtures.length, "Expected one Native report per fixture");
     const timing = medianTime(() => assert.ok(Number(run(["--benchmark"])) > 0), rounds);
-    return { results, timing, size: artifact(readFileSync(executable)) };
+    const streaming = streamOptions ? measureNativeStream(run, streamOptions) : undefined;
+    return { results, timing, streaming, size: artifact(readFileSync(executable)) };
   } finally {
     assert.equal(dirname(temp), builds);
     assert.ok(basename(temp).startsWith("corpus-native-"));
     rmSync(temp, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
   }
+}
+
+function nativeStreamProbe() {
+  const source = ecosystemPayload();
+  const chunks = source.match(/[\s\S]{1,256}/g);
+  // The same bridge exported to Node produces the preview/Patch envelope.
+  // Native times whole processes, so report that boundary explicitly.
+  const code = [
+    "///|", "fn stream_bench() -> Unit {",
+    "  let chunks = [", ...chunks.map(chunk => "    " + moonString(chunk) + ","), "  ]",
+    "  let mut count = 0", "  let mut prefix = \"\"", "  let mut last = \"\"",
+    "  lab_stream_start(false, false)",
+    "  for index, chunk in chunks {",
+    "    prefix = prefix + chunk",
+    "    if !lab_stream_push(chunk) { return }",
+    '    last = lab_stream_view(prefix, "", false, false, index == chunks.length() - 1)',
+    '    if last.has_prefix("{\\"ok\\":true,") { count += 1 }',
+    "  }",
+    "  println(count)", "  println(last)", "}", "",
+  ].join("\n");
+  return { code, source, chunkCount: chunks.length };
+}
+
+function measureNativeStream(run, { source, chunkCount }) {
+  const replay = () => run(["--stream-bench"]);
+  const [count, wire] = replay().split(/\r?\n/);
+  assert.equal(Number(count), chunkCount);
+  assert.equal(JSON.parse(wire).blocks[0].report.json, source);
+  const ms = medianMilliseconds(replay);
+  return { snapshots: chunkCount, ms: Number(ms.toFixed(2)), boundary: "spawn + bridge batch + output" };
 }
 
 const failures = [];
@@ -230,8 +269,18 @@ const engines = [
   summarize("Wasm GC", inputs.map(args => instance.exports.moonLabRun(...args)), measure(instance.exports.moonLabRun), artifact(wasmBytes), failures),
 ];
 if (distribution || options.includes("--native")) {
-  const { results, timing, size } = nativeEngine();
-  engines.push(summarize("Native", results, timing, size, failures));
+  const { results, timing, streaming, size } = nativeEngine();
+  engines.push({ ...summarize("Native", results, timing, size, failures), streaming });
+}
+if (options.includes("--sdk")) {
+  const { createRepairEngine } = await import("../packages/json-repair-wasm/index.mjs");
+  const sdk = await createRepairEngine();
+  const sdkArtifact = readFileSync(join(repo, "packages", "json-repair-wasm", "engine.wasm"));
+  const run = (source, schema, json5, coerce, extract, ignoreThink) => {
+    const opts = { schema, json5, coerce, ignoreThink };
+    return (extract ? sdk.extractAll(source, opts) : sdk.repair(source, opts)).wire;
+  };
+  engines.push(summarize("Wasm GC SDK", inputs.map(args => run(...args)), measure(run), artifact(sdkArtifact), failures));
 }
 const report = { fixtureBytesPerBatch: bytesPerBatch, engines, failures };
 if (options.includes("--json")) console.log(JSON.stringify(report, null, 2));

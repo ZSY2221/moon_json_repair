@@ -12,7 +12,7 @@ function showLatency(samples, steps) {
   const max = Math.max(1, ...samples[0], ...samples[1]);
   elements["latency-incremental"].setAttribute("points", latencyLine(samples[0], max, steps));
   elements["latency-reference"].setAttribute("points", latencyLine(samples[1], max, steps));
-  elements["latency-range"].textContent = "Shared scale 0–" + max.toFixed(1) + " µs";
+  labSet(elements["latency-range"], "Shared scale 0–{0} µs", max.toFixed(1));
   elements["latency-progress"].max = steps;
   elements["latency-progress"].value = samples[0].length;
 }
@@ -28,7 +28,7 @@ async function measureStreamLatency() {
   let running = false;
   button.disabled = true;
   elements["latency-chunk"].disabled = true;
-  status.textContent = engineName + " · Measuring…";
+  labSet(status, "{0} · Measuring…", engineName);
   showLatency(samples, steps);
   try {
     await nextFrame();
@@ -44,7 +44,7 @@ async function measureStreamLatency() {
         if (!accepted) throw new Error("The benchmark could not append a chunk.");
         samples[lane].push(duration);
       }
-      if (!engine.benchMatches()) throw new Error("Snapshot mismatch at chunk " + (index + 1) + ".");
+      if (!engine.benchMatches()) throw Object.assign(new Error("Snapshot mismatch at chunk {0}."), { chunk: index + 1 });
       if ((index + 1) % 12 === 0) {
         showLatency(samples, steps);
         await nextFrame();
@@ -55,12 +55,12 @@ async function measureStreamLatency() {
     if (!finished) throw new Error("The final documents did not match.");
     showLatency(samples, steps);
     const [incremental, reference] = samples.map(series => series.reduce((total, value) => total + value, 0));
-    const ratio = incremental > 0 ? " · " + (reference / incremental).toFixed(2) + "× reference/incremental" : "";
-    status.textContent = engineName + " · " + steps + " snapshots matched · " +
-      (incremental / 1_000).toFixed(2) + " ms incremental · " +
-      (reference / 1_000).toFixed(2) + " ms reference" + ratio;
+    labBind(status, () => labText("{0} · {1} snapshots matched · {2} ms incremental · {3} ms reference",
+      engineName, steps, (incremental / 1_000).toFixed(2), (reference / 1_000).toFixed(2)) +
+      (incremental > 0 ? labText(" · {0}× reference/incremental", (reference / incremental).toFixed(2)) : ""));
   } catch (error) {
-    status.textContent = "Benchmark stopped. " + error.message;
+    labBind(status, () => labText("Benchmark stopped. {0}", Object.hasOwn(labChinese, error.message)
+      ? labText(error.message, error.chunk) : labEngineMessage(error.message, "Unable to repair")));
     if (running) engine.benchFinish();
   } finally {
     button.disabled = false;
@@ -84,9 +84,13 @@ function pwshString(text) {
   return "'" + text.replace(/['\u2018\u2019]/g, "$&$&") + "'";
 }
 
-function moonbitSnippet(source, schema, { json5, coerce, extract, ignoreThink, mcp }) {
+function snippetComment(message) {
+  return typeof labText === "function" ? labText(message) : message;
+}
+
+function moonbitSnippet(source, schema, { json5, coerce, extract, ignoreThink, mcp, semantic, diagnostics, chinese }) {
   const program = [
-    '// moon.pkg imports "ZSY2221/json_repair" @repair and "moonbitlang/core/json".',
+    snippetComment('// moon.pkg imports "ZSY2221/json_repair" @repair and "moonbitlang/core/json".'),
     "fn main {",
     "  let source = " + moonbitString(source),
     "  let policy : @repair.RepairPolicy = {",
@@ -115,11 +119,21 @@ function moonbitSnippet(source, schema, { json5, coerce, extract, ignoreThink, m
       program.push("  let report = @repair.repair_with_policy(source, policy).unwrap()");
     }
     const indent = extract ? "    " : "  ";
+    const language = ", chinese=" + Boolean(chinese);
+    if (diagnostics) {
+      program.push(indent + "println(@repair.render_repair_audit(source, report.edits" + language + "))");
+    }
     if (schema && coerce) {
+      if (semantic) {
+        program.push(indent + "let result = @repair.coerce_with_schema_semantic(report.value, schema)");
+      } else {
+        program.push(
+          indent + "let result = @repair.coerce_with_schema(report.value, schema, options={",
+          indent + "  number_strings: true, boolean_strings: true, wrap_scalar_arrays: true,",
+          indent + "})",
+        );
+      }
       program.push(
-        indent + "let result = @repair.coerce_with_schema(report.value, schema, options={",
-        indent + "  number_strings: true, boolean_strings: true, wrap_scalar_arrays: true,",
-        indent + "})",
         indent + "println(result.json)",
         indent + "println(@json.to_json(result.errors).stringify())",
       );
@@ -132,20 +146,22 @@ function moonbitSnippet(source, schema, { json5, coerce, extract, ignoreThink, m
   return [...program, "}"].join("\n");
 }
 
-function cliSnippet(source, schema, { json5, coerce, extract, ignoreThink, mcp }) {
+function cliSnippet(source, schema, { json5, coerce, extract, ignoreThink, mcp, semantic, diagnostics }) {
   const program = [
-    "# Run from the project root in PowerShell.",
+    snippetComment("# Run from the project root in PowerShell."),
     '$labDir = Join-Path ([IO.Path]::GetTempPath()) ("moon-repair-" + [Guid]::NewGuid().ToString("N"))',
     "New-Item -ItemType Directory -Path $labDir | Out-Null",
     "$labRequest = Join-Path $labDir 'request.json'",
   ];
   const flags = [];
   if (mcp) {
-    program.push("# The input file holds one JSON-RPC frame per line.");
+    program.push(snippetComment("# The input file holds one JSON-RPC frame per line."));
     flags.push("--mcp-guard", "--tool-schemas", "$labSchema", "--strict-exit");
   } else {
     if (schema) flags.push("--schema", "$labSchema");
     if (extract) flags.push("--extract-all");
+    if (diagnostics) flags.push("--diagnostic-format", "pretty");
+    if (schema && coerce && semantic) program.unshift(snippetComment("# Use the MoonBit example for semantic coercion."));
   }
   if (ignoreThink) flags.push("--ignore-think");
   if (json5) flags.push("--json5");
@@ -162,13 +178,29 @@ function cliSnippet(source, schema, { json5, coerce, extract, ignoreThink, mcp }
 function refreshCodeSnippets() {
   if (!elements["code-card"].open) return;
   const [json5, coerce, extract, ignoreThink] = repairOptions();
-  const settings = { json5, coerce, extract, ignoreThink, mcp: elements["enable-mcp"].checked };
+  const settings = {
+    json5, coerce, extract, ignoreThink,
+    mcp: elements["enable-mcp"].checked,
+    semantic: elements["enable-semantic"].checked,
+    diagnostics: elements["enable-diagnostics"].checked,
+    chinese: labLanguage === "zh",
+  };
   const input = playback?.target ?? elements.source.value;
-  const schema = elements.schema.value.trim();
-  elements["moonbit-code"].textContent = moonbitSnippet(input, schema, settings);
-  elements["cli-code"].textContent = cliSnippet(input, schema, settings);
-  elements["copy-moonbit"].textContent = "Copy MoonBit";
-  elements["copy-cli"].textContent = "Copy PowerShell";
+  const schema = elements.schema.value;
+  const blocked = playback ? playbackBudget(playback, schema) : inspectLabInput(input, schema);
+  if (blocked) {
+    labSet(elements["moonbit-code"], "Shorten the input or select a preset to continue.");
+    labSet(elements["cli-code"], "Shorten the input or select a preset to continue.");
+  } else {
+    labClear(elements["moonbit-code"]);
+    labClear(elements["cli-code"]);
+    elements["moonbit-code"].textContent = moonbitSnippet(input, schema.trim(), settings);
+    elements["cli-code"].textContent = cliSnippet(input, schema.trim(), settings);
+  }
+  elements["copy-moonbit"].disabled = Boolean(blocked);
+  elements["copy-cli"].disabled = Boolean(blocked);
+  labSet(elements["copy-moonbit"], "Copy MoonBit");
+  labSet(elements["copy-cli"], "Copy PowerShell");
 }
 
 function connectLabTools() {
@@ -178,7 +210,7 @@ function connectLabTools() {
     elements["copy-" + language].addEventListener("click", async () => {
       const snippet = elements[language + "-code"];
       const copied = await copyText(snippet.textContent, snippet);
-      elements["copy-" + language].textContent = copied ? "Copied" : "Text selected";
+      labSet(elements["copy-" + language], copied ? "Copied" : "Text selected");
     });
   }
 }

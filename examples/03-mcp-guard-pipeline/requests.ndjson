@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":"list-1","method":"tools/list"}
+{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"read_invoice","arguments":{"invoice_id":"INV-42"}}}
+{"jsonrpc":"2.0","id":"repair-1","method":"tools/call","params":{"name":"create_invoice","arguments":"{\"order_id\":\"9007199254740993\",\"currency\":\"USD\",\"amount_cents\":\"1250\""
+{"jsonrpc":"2.0","id":"amount-1","method":"tools/call","params":{"name":"create_invoice","arguments":{"order_id":9007199254740993,"currency":"USD","amount_cents":-25}}}

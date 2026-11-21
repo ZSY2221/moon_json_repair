@@ -1,0 +1,18 @@
+{
+  "create_invoice": {
+    "type": "object",
+    "required": ["order_id", "currency", "amount_cents"],
+    "properties": {
+      "order_id": {"type": "integer", "minimum": 1},
+      "currency": {"enum": ["USD", "EUR"]},
+      "amount_cents": {"type": "integer", "minimum": 1, "maximum": 1000000}
+    }
+  },
+  "read_invoice": {
+    "type": "object",
+    "required": ["invoice_id"],
+    "properties": {
+      "invoice_id": {"type": "string", "minLength": 1}
+    }
+  }
+}

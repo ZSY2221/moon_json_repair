@@ -55,46 +55,128 @@ fn lab_checked(errors : Array[@repair.ValidationError]) -> Json {
 }
 
 ///|
+priv struct LabPresentation {
+  schema_text : String
+  schema : LabSchema
+  coerce : Bool
+  semantic : Bool
+  diagnostics : Bool
+  chinese : Bool
+}
+
+///|
+fn LabPresentation::new(
+  schema_text : String,
+  coerce : Bool,
+  semantic : Bool,
+  diagnostics : Bool,
+  chinese : Bool,
+) -> LabPresentation {
+  {
+    schema_text,
+    schema: read_lab_schema(schema_text),
+    coerce,
+    semantic,
+    diagnostics,
+    chinese,
+  }
+}
+
+///|
+fn lab_validation_diagnostic(
+  source : String,
+  output : String,
+  edits : Array[@repair.RepairEdit],
+  errors : Array[@repair.ValidationError],
+  options : LabPresentation,
+) -> String {
+  let messages = if edits.is_empty() {
+    []
+  } else {
+    [@repair.render_repair_audit(source, edits, chinese=options.chinese)]
+  }
+  let instance = []
+  let schema = []
+  for error in errors {
+    if error.path.has_prefix("$schema") {
+      schema.push(@repair.SourceDiagnostic::Schema(error))
+    } else {
+      instance.push(@repair.SourceDiagnostic::Schema(error))
+    }
+  }
+  if !instance.is_empty() {
+    messages.push(
+      @repair.render_diagnostics(output, instance, chinese=options.chinese),
+    )
+  }
+  if !schema.is_empty() {
+    messages.push(
+      @repair.render_diagnostics(
+        options.schema_text,
+        schema,
+        chinese=options.chinese,
+      ),
+    )
+  }
+  messages.join("\n\n")
+}
+
+///|
 fn lab_block(
+  source : String,
   report : @repair.RepairReport,
   start : @repair.SourcePosition,
   end : @repair.SourcePosition,
   confidence : Int32,
-  schema : LabSchema,
-  coerce : Bool,
+  options : LabPresentation,
   trace : Json?,
 ) -> Json {
-  let (output, value, coercions, validation, retry_prompt) = match schema {
-    LabSkip => (report.json, report.value, Json::array([]), lab_skipped(), "")
+  let (output, value, coercions, validation, retry_prompt, issues) = match
+    options.schema {
+    LabSkip =>
+      (report.json, report.value, Json::array([]), lab_skipped(), "", [])
     LabInvalid(message) =>
-      (report.json, report.value, Json::array([]), lab_invalid(message), "")
+      (report.json, report.value, Json::array([]), lab_invalid(message), "", [])
     LabParsed(schema) => {
-      let (output, value, edits, errors) = if coerce {
-        let treatment = @repair.coerce_with_schema(report.value, schema, options={
+      let (output, value, edits, errors, retry) = if options.coerce {
+        let base : @repair.CoercionOptions = {
           number_strings: true,
           boolean_strings: true,
           wrap_scalar_arrays: true,
-        })
+        }
+        let treatment = if options.semantic {
+          @repair.coerce_with_schema_semantic(
+            report.value,
+            schema,
+            options=base.with_semantic(),
+          )
+        } else {
+          @repair.coerce_with_schema(report.value, schema, options=base)
+        }
+        let retry = if treatment.errors.is_empty() {
+          ""
+        } else if options.semantic {
+          treatment.format_retry_prompt(schema)
+        } else {
+          @repair.format_retry_prompt(treatment.value, schema)
+        }
         (
           treatment.json,
           treatment.value,
           @json.to_json(treatment.edits),
           treatment.errors,
+          retry,
         )
       } else {
-        (
-          report.json,
-          report.value,
-          Json::array([]),
-          @repair.validate(report.value, schema),
-        )
+        let errors = @repair.validate(report.value, schema)
+        let retry = if errors.is_empty() {
+          ""
+        } else {
+          @repair.format_retry_prompt(report.value, schema)
+        }
+        (report.json, report.value, Json::array([]), errors, retry)
       }
-      let retry = if errors.is_empty() {
-        ""
-      } else {
-        @repair.format_retry_prompt(value, schema)
-      }
-      (output, value, edits, lab_checked(errors), retry)
+      (output, value, edits, lab_checked(errors), retry, errors)
     }
   }
   let block : Map[String, Json] = {
@@ -111,6 +193,18 @@ fn lab_block(
   if trace is Some(trace) {
     block["trace"] = trace
   }
+  if options.diagnostics {
+    let diagnostic = lab_validation_diagnostic(
+      source,
+      output,
+      report.edits,
+      issues,
+      options,
+    )
+    if diagnostic != "" {
+      block["diagnostic"] = Json::string(diagnostic)
+    }
+  }
   Json::object(block)
 }
 
@@ -118,11 +212,28 @@ fn lab_block(
 fn lab_response(
   result : Result[Array[Json], @repair.RepairError],
   status : @repair.StreamStatus,
+  source : String,
+  options : LabPresentation,
 ) -> String {
   let stream = @json.to_json(status)
   let payload : Json = match result {
-    Err(error) =>
-      { "ok": false, "error": @json.to_json(error), "stream": stream }
+    Err(error) => {
+      let failure : Map[String, Json] = {
+        "ok": false,
+        "error": @json.to_json(error),
+        "stream": stream,
+      }
+      if options.diagnostics {
+        failure["diagnostic"] = Json::string(
+          @repair.render_diagnostic(
+            source,
+            @repair.SourceDiagnostic::Repair(error),
+            chinese=options.chinese,
+          ),
+        )
+      }
+      Json::object(failure)
+    }
     Ok(blocks) =>
       { "ok": true, "blocks": Json::array(blocks), "stream": stream }
   }
@@ -132,15 +243,13 @@ fn lab_response(
 ///|
 fn lab_result(
   source : String,
-  schema_text : String,
+  options : LabPresentation,
   policy : @repair.RepairPolicy,
   stream : @repair.RepairStream,
-  coerce : Bool,
   extract : Bool,
   finalize : Bool,
   session : LabSession?,
 ) -> String {
-  let schema = read_lab_schema(schema_text)
   if extract {
     if finalize && !stream.status().finalized {
       ignore(stream.finalize())
@@ -160,12 +269,12 @@ fn lab_result(
               )
           }
           lab_block(
+            source,
             block.report,
             block.start,
             block.end,
             block.confidence,
-            schema,
-            coerce,
+            options,
             trace,
           )
         })
@@ -175,6 +284,8 @@ fn lab_result(
         result
       }),
       stream.status(),
+      source,
+      options,
     )
   }
   let (report, trace) = if session is Some(_) {
@@ -190,22 +301,35 @@ fn lab_result(
   } else {
     (stream.preview(), None)
   }
+  lab_single_response(source, options, stream, report, trace)
+}
+
+///|
+fn lab_single_response(
+  source : String,
+  options : LabPresentation,
+  stream : @repair.RepairStream,
+  report : Result[@repair.RepairReport, @repair.RepairError],
+  trace : Json?,
+) -> String {
   let status = stream.status()
   lab_response(
     report.map(report => {
       [
         lab_block(
+          source,
           report,
           { offset: 0, line: 1, column: 1, },
           status.position,
           100,
-          schema,
-          coerce,
+          options,
           trace,
         ),
       ]
     }),
     status,
+    source,
+    options,
   )
 }
 
@@ -226,12 +350,33 @@ pub fn lab_run(
   extract : Bool,
   ignore_think : Bool,
 ) -> String {
+  lab_run_with_options(
+    source, schema, json5, coerce, extract, ignore_think, false, false, false,
+  )
+}
+
+///|
+/// Run a laboratory repair with optional semantic coercion and localized diagnostics.
+#export_name("moonLabRunWithOptions")
+pub fn lab_run_with_options(
+  source : String,
+  schema : String,
+  json5 : Bool,
+  coerce : Bool,
+  extract : Bool,
+  ignore_think : Bool,
+  semantic : Bool,
+  diagnostics : Bool,
+  chinese : Bool,
+) -> String {
+  let options = LabPresentation::new(
+    schema, coerce, semantic, diagnostics, chinese,
+  )
   let policy = lab_policy(json5, ignore_think)
   let stream = @repair.RepairStream::with_policy(policy)
   match stream.push(source) {
-    Err(error) => lab_response(Err(error), stream.status())
-    Ok(_) =>
-      lab_result(source, schema, policy, stream, coerce, extract, false, None)
+    Err(error) => lab_response(Err(error), stream.status(), source, options)
+    Ok(_) => lab_result(source, options, policy, stream, extract, false, None)
   }
 }
 
@@ -321,13 +466,33 @@ pub fn lab_stream_view(
   extract : Bool,
   finalize : Bool,
 ) -> String {
+  lab_stream_view_with_options(
+    source, schema, coerce, extract, finalize, false, false, false,
+  )
+}
+
+///|
+/// Publish one laboratory snapshot with optional coercion and localized diagnostics.
+#export_name("moonLabStreamViewWithOptions")
+pub fn lab_stream_view_with_options(
+  source : String,
+  schema : String,
+  coerce : Bool,
+  extract : Bool,
+  finalize : Bool,
+  semantic : Bool,
+  diagnostics : Bool,
+  chinese : Bool,
+) -> String {
   let session = current_lab_session.val
+  let options = LabPresentation::new(
+    schema, coerce, semantic, diagnostics, chinese,
+  )
   lab_result(
     source,
-    schema,
+    options,
     session.policy,
     session.stream,
-    coerce,
     extract,
     finalize,
     Some(session),

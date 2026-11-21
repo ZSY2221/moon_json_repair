@@ -16,13 +16,25 @@ pub fn lab_repair_only(String) -> Bool
 
 pub fn lab_run(String, String, Bool, Bool, Bool, Bool) -> String
 
+pub fn lab_run_with_options(String, String, Bool, Bool, Bool, Bool, Bool, Bool, Bool) -> String
+
 pub fn lab_stream_push(String) -> Bool
 
 pub fn lab_stream_start(Bool, Bool) -> Unit
 
 pub fn lab_stream_view(String, String, Bool, Bool, Bool) -> String
 
+pub fn lab_stream_view_with_options(String, String, Bool, Bool, Bool, Bool, Bool, Bool) -> String
+
 pub fn run_payload(String, String) -> String
+
+pub fn sdk_stream_close(Int32) -> Unit
+
+pub fn sdk_stream_push(Int32, String) -> String
+
+pub fn sdk_stream_start(String, Bool, Bool, Bool, Bool, Bool, Bool) -> Int32
+
+pub fn sdk_stream_view(Int32, Bool, Bool) -> String
 
 // Errors
 
