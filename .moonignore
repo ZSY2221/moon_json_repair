@@ -30,6 +30,12 @@
 
 !/cmd/
 /cmd/*
+!/cmd/cli/
+/cmd/cli/*
+!/cmd/cli/cli.mbt
+!/cmd/cli/cli_test.mbt
+!/cmd/cli/moon.pkg
+!/cmd/cli/pkg.generated.mbti
 !/cmd/main/
 /cmd/main/*
 !/cmd/main/main.mbt

@@ -1,69 +1,17 @@
 ///|
 let usage : String =
-  #|Usage: moon run --target native cmd/main -- [--schema FILE] [INPUT|-]
+  #|Usage: moon run --target native cmd/main -- [OPTIONS] [INPUT|-]
   #|
   #|Read one UTF-8 JSON document from INPUT or from standard input.
-  #|Pass --schema FILE to check the result against a strict JSON schema document.
-  #|Print the repaired document and audit report as one JSON object.
-
-///|
-priv struct Options {
-  input : String?
-  schema : String?
-}
-
-///|
-suberror CliFailure {
-  CliFailure(Json, Int32)
-}
-
-///|
-fn[T] fail_cli(
-  kind : String,
-  message : String,
-  status~ : Int32 = 1,
-) -> T raise CliFailure {
-  raise CliFailure(
-    { "kind": Json::string(kind), "message": Json::string(message) },
-    status,
-  )
-}
-
-///|
-fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
-  let mut input : String? = None
-  let mut schema : String? = None
-  let mut positional_only = false
-  for remaining = args {
-    match remaining {
-      [] => break
-      ["--schema", path, .. rest] if !positional_only => {
-        if schema is Some(_) {
-          fail_cli("usage", "--schema may only be supplied once", status=2)
-        }
-        schema = Some(path)
-        continue rest
-      }
-      ["--schema"] if !positional_only =>
-        fail_cli("usage", "--schema requires a file path", status=2)
-      ["--", .. rest] if !positional_only => {
-        positional_only = true
-        continue rest
-      }
-      [argument, .. rest] => {
-        if !positional_only && argument != "-" && argument.has_prefix("-") {
-          fail_cli("usage", "unknown option \{argument}", status=2)
-        }
-        if input is Some(_) {
-          fail_cli("usage", "expected at most one input path", status=2)
-        }
-        input = Some(argument)
-        continue rest
-      }
-    }
-  }
-  { input: if input == Some("-") { None } else { input }, schema, }
-}
+  #|  --schema FILE    Check against a strict JSON schema document.
+  #|  --ndjson         Process each physical line and continue after line errors.
+  #|  --extract-all    Return all repairable JSON blocks.
+  #|  --ignore-think   Skip reasoning blocks before repairing JSON.
+  #|  --coerce         Coerce schema-typed numeric and Boolean strings.
+  #|  --retry-prompt   Include a repair prompt for schema errors.
+  #|  --strict-exit    Return 1 for rejected batch lines or 3 for schema errors.
+  #|
+  #|--coerce and --retry-prompt require --schema.
 
 ///|
 async fn read_bounded(
@@ -77,15 +25,15 @@ async fn read_bounded(
   let content = @buffer.Buffer()
   while reader.read() is Some(chunk) {
     if chunk.length() > max_bytes - content.length() {
-      fail_cli("input_limit", "\{label} exceeds the supported input size")
+      @cli.fail_cli("input_limit", "\{label} exceeds the supported input size")
     }
     content.write_bytes(chunk[:])
   }
   let text = @utf8.decode(content.to_bytes()[:], ignore_bom=!preserve_bom) catch {
-    _ => fail_cli("invalid_utf8", "\{label} must be valid UTF-8")
+    _ => @cli.fail_cli("invalid_utf8", "\{label} must be valid UTF-8")
   }
   if text.length() > max_chars {
-    fail_cli("input_limit", "\{label} exceeds the supported input size")
+    @cli.fail_cli("input_limit", "\{label} exceeds the supported input size")
   }
   text
 }
@@ -107,55 +55,93 @@ async fn read_path(
       }
     }
   } catch {
-    CliFailure(_, _) as error => raise error
-    error => fail_cli("io", "could not read \{label}: \{error.to_string()}")
+    @cli.CliFailure(_, _) as error => raise error
+    error =>
+      @cli.fail_cli("io", "could not read \{label}: \{error.to_string()}")
   }
 }
 
 ///|
-async fn run(options : Options) -> Int32 {
-  let limits = @repair.RepairLimits::default()
-  let input = read_path(options.input, "input", limits.max_input, true)
-  let report = match @repair.repair(input, limits~) {
-    Ok(report) => report
-    Err(error) => raise CliFailure(@json.to_json(error), 1)
+async fn read_schema(path : String?, max_chars : Int32) -> Json? {
+  match path {
+    None => None
+    Some(path) =>
+      Some(@cli.parse_schema(read_path(Some(path), "schema", max_chars, false)))
   }
-  let (schema_report, status) : (Json, Int32) = match options.schema {
-    None => (Json::null(), 0)
-    Some(path) => {
-      let schema_text = read_path(Some(path), "schema", limits.max_input, false)
-      let schema = @json.parse(
-        schema_text[:],
-        max_nesting_depth=514,
-        reject_duplicate_keys=true,
-        preserve_number_repr=true,
-      ) catch {
-        error =>
-          fail_cli(
-            "schema_parse",
-            "could not parse schema: \{error.to_string()}",
-          )
+}
+
+///|
+async fn write_batch_line(
+  record : @cli.BatchLine,
+  schema : Json?,
+  options : @cli.Options,
+) -> Int32 {
+  let outcome = @cli.process_line(record, schema, options)
+  @stdio.stdout.text.write("\{outcome.for_line(record.line).stringify()}\n")
+  outcome.status
+}
+
+///|
+async fn run_batch(
+  reader : &@io.BinaryReader,
+  schema : Json?,
+  options : @cli.Options,
+  max_chars : Int32,
+) -> Int32 {
+  let lines = @cli.BatchLines::new(max_chars~)
+  let mut status = 0
+  while reader.read() is Some(chunk) {
+    let mut offset = 0
+    while offset < chunk.length() {
+      let (next, record) = lines.next(chunk[:], offset)
+      offset = next
+      if record is Some(record) {
+        status = @cli.merge_status(
+          status,
+          write_batch_line(record, schema, options),
+        )
       }
-      let errors = @repair.validate(report.value, schema)
-      let valid = errors.is_empty()
-      (
-        { "valid": Json::boolean(valid), "errors": @json.to_json(errors) },
-        if valid {
-          0
-        } else {
-          3
-        },
-      )
     }
   }
-  let output : Json = {
-    "json": Json::string(report.json),
-    "value": report.value,
-    "edits": @json.to_json(report.edits),
-    "schema": schema_report,
+  if lines.finish() is Some(record) {
+    status = @cli.merge_status(
+      status,
+      write_batch_line(record, schema, options),
+    )
   }
-  @stdio.stdout.text.write("\{output.stringify()}\n")
-  status
+  @cli.batch_exit_status(options, status)
+}
+
+///|
+async fn run(options : @cli.Options) -> Int32 {
+  let max_chars = @repair.RepairLimits::default().max_input
+  if options.ndjson {
+    let schema = read_schema(options.schema, max_chars)
+    match options.input {
+      None => run_batch(@stdio.stdin, schema, options, max_chars)
+      Some(path) => {
+        let file = @fs.open(path[:], mode=ReadOnly) catch {
+          error =>
+            @cli.fail_cli("io", "could not read input: \{error.to_string()}")
+        }
+        defer file.close()
+        run_batch(file, schema, options, max_chars)
+      }
+    }
+  } else {
+    let input = read_path(options.input, "input", max_chars, true)
+    let prepared = match @cli.prepare_input(input, options) {
+      Ok(prepared) => prepared
+      Err(error) => raise @cli.CliFailure(error, 1)
+    }
+    let outcome = @cli.present(
+      prepared,
+      read_schema(options.schema, max_chars),
+      options,
+    )
+    @stdio.stdout.text.write("\{outcome.report().stringify()}\n")
+    outcome.status
+  }
 }
 
 ///|
@@ -166,10 +152,10 @@ async fn main {
       @stdio.stdout.text.write("\{usage}\n")
       0
     } else {
-      run(parse_args(args))
+      run(@cli.parse_args(args))
     }
   } catch {
-    CliFailure(error, status) => {
+    @cli.CliFailure(error, status) => {
       let output : Json = { "error": error }
       @stdio.stderr.text.write("\{output.stringify()}\n")
       status

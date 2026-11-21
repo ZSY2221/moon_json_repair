@@ -1,0 +1,69 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "ZSY2221/json_repair/cmd/cli"
+
+import {
+  "ZSY2221/json_repair",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn batch_exit_status(Options, Int32) -> Int32
+
+pub fn[T] fail_cli(String, String, status? : Int32) -> T raise CliFailure
+
+pub fn merge_status(Int32, Int32) -> Int32
+
+pub fn parse_args(ArrayView[String]) -> Options raise CliFailure
+
+pub fn parse_schema(String) -> @json.Json raise CliFailure
+
+pub fn prepare_input(String, Options) -> Result[PreparedInput, @json.Json]
+
+pub fn present(PreparedInput, @json.Json?, Options) -> Outcome
+
+pub fn process_line(BatchLine, @json.Json?, Options) -> Outcome
+
+// Errors
+pub(all) suberror CliFailure {
+  CliFailure(@json.Json, Int32)
+}
+
+// Types and methods
+pub struct BatchLine {
+  line : Int64
+  input : Result[String, @json.Json]
+}
+
+pub struct BatchLines {
+  // private fields
+}
+pub fn BatchLines::finish(Self) -> BatchLine?
+pub fn BatchLines::new(max_chars~ : Int32) -> Self
+pub fn BatchLines::next(Self, BytesView, Int32) -> (Int32, BatchLine?)
+
+pub struct Options {
+  input : String?
+  schema : String?
+  ndjson : Bool
+  extract_all : Bool
+  ignore_think : Bool
+  coerce : Bool
+  retry_prompt : Bool
+  strict_exit : Bool
+}
+
+pub struct Outcome {
+  fields : Map[String, @json.Json]
+  status : Int32
+}
+pub fn Outcome::for_line(Self, Int64) -> @json.Json
+pub fn Outcome::report(Self) -> @json.Json
+
+pub enum PreparedInput {
+  Single(@json_repair.RepairReport)
+  Multiple(Array[@json_repair.ExtractedBlock])
+}
+
+// Type aliases
+
+// Traits

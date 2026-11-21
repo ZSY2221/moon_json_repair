@@ -1,12 +1,12 @@
 import {
   "ZSY2221/json_repair" @repair,
+  "ZSY2221/json_repair/cmd/cli",
   "moonbitlang/core/async/fs",
   "moonbitlang/core/async/io",
   "moonbitlang/core/async/stdio",
   "moonbitlang/core/buffer",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
-  "moonbitlang/core/json",
 }
 
 pkgtype(kind: "executable")

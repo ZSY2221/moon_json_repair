@@ -1,0 +1,6 @@
+import {
+  "ZSY2221/json_repair" @repair,
+  "moonbitlang/core/buffer",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/json",
+}
