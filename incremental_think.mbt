@@ -334,7 +334,6 @@ fn ThinkPath::feed(self : ThinkPath, unit : Char, end : Int32) -> Char? {
 
 ///|
 priv enum ThinkClosePhase {
-  OwnLine
   FindQuote
   SkipEscaped
   QuoteBoundary
@@ -348,24 +347,17 @@ priv enum ThinkResolution {
 }
 
 ///|
-priv struct ThinkPendingClose {
-  candidate : ThinkPath
+priv struct ThinkQuoteLookahead {
   quote : Char
   mut phase : ThinkClosePhase
 }
 
 ///|
-fn ThinkPendingClose::observe(
-  self : ThinkPendingClose,
+fn ThinkQuoteLookahead::observe(
+  self : ThinkQuoteLookahead,
   unit : Char,
 ) -> ThinkResolution {
   match self.phase {
-    OwnLine =>
-      if unit is ('\r' | '\n') {
-        self.phase = FindQuote
-      } else if !(unit is (' ' | '\t')) {
-        return Retain
-      }
     FindQuote =>
       if unit == self.quote {
         self.phase = QuoteBoundary
@@ -386,15 +378,103 @@ fn ThinkPendingClose::observe(
 }
 
 ///|
+priv struct ThinkOwnLine {
+  recovered : ThinkPath
+  quote : Char
+}
+
+///|
+// A path may constrain either quote kind, or be independent of its outcome.
+// The disjoint hypotheses cover every assignment of the active quote guards.
+priv struct ThinkAlternative {
+  mut path : ThinkPath
+  mut own_line : ThinkOwnLine?
+  mut protects : Int32
+  mut recovers : Int32
+}
+
+///|
 priv struct ThinkCheckpoint {
-  mut current : ThinkPath
-  mut pending : ThinkPendingClose?
+  paths : Array[ThinkAlternative]
+  quote_guards : FixedArray[ThinkQuoteLookahead?]
   mut consumed : Int32
 }
 
 ///|
 fn ThinkCheckpoint::new(max_depth : Int32, json5 : Bool) -> ThinkCheckpoint {
-  { current: ThinkPath::new(max_depth, json5), pending: None, consumed: 0, }
+  {
+    paths: [
+      {
+        path: ThinkPath::new(max_depth, json5),
+        own_line: None,
+        protects: 0,
+        recovers: 0,
+      },
+    ],
+    quote_guards: [None, None],
+    consumed: 0,
+  }
+}
+
+///|
+fn think_quote_index(quote : Char) -> Int32 {
+  if quote == '"' {
+    0
+  } else {
+    1
+  }
+}
+
+///|
+fn ThinkCheckpoint::resolve_quote(
+  self : ThinkCheckpoint,
+  index : Int32,
+  recover : Bool,
+) -> Unit {
+  self.quote_guards[index] = None
+  let bit = 1 << index
+  let other = 3 ^ bit
+  for at = self.paths.length() - 1; at >= 0; at = at - 1 {
+    let alternative = self.paths[at]
+    let conflicts = if recover {
+      alternative.protects
+    } else {
+      alternative.recovers
+    }
+    if (conflicts & bit) != 0 {
+      ignore(self.paths.remove(at))
+    } else {
+      alternative.protects = alternative.protects & other
+      alternative.recovers = alternative.recovers & other
+    }
+  }
+}
+
+///|
+fn ThinkCheckpoint::confirm_own_line(
+  self : ThinkCheckpoint,
+  alternative : ThinkAlternative,
+  line : ThinkOwnLine,
+) -> Unit {
+  let index = think_quote_index(line.quote)
+  let bit = 1 << index
+  if (alternative.recovers & bit) != 0 {
+    alternative.path = line.recovered
+    return
+  }
+  // A later standalone marker of the same kind shares the unresolved quote
+  // search. Its tag would already have settled a pending quote boundary, and
+  // the last two tag units clear any raw escape before the line break.
+  if self.quote_guards[index] is None {
+    self.quote_guards[index] = Some({ quote: line.quote, phase: FindQuote, })
+  }
+  self.paths.push({
+    path: line.recovered,
+    own_line: None,
+    protects: alternative.protects,
+    recovers: alternative.recovers | bit,
+  })
+  alternative.protects = alternative.protects | bit
 }
 
 ///|
@@ -404,25 +484,38 @@ fn ThinkCheckpoint::feed(
   end : Int32,
 ) -> Unit {
   self.consumed += 1
-  let possible = self.current.feed(unit, end)
-  match self.pending {
-    Some(pending) => {
-      ignore(pending.candidate.feed(unit, end))
-      match pending.observe(unit) {
+  // Settle older guards first. A retained or recovered hypothesis carries the
+  // other quote's decision and any tentative standalone marker with it.
+  for index in 0..<self.quote_guards.length() {
+    if self.quote_guards[index] is Some(guard_) {
+      match guard_.observe(unit) {
         Hold => ()
-        Retain => self.pending = None
-        Resume => {
-          self.current = pending.candidate
-          self.pending = None
-        }
+        Retain => self.resolve_quote(index, false)
+        Resume => self.resolve_quote(index, true)
       }
     }
-    None =>
-      if possible is Some(quote) {
-        let candidate = self.current.checkpoint_copy()
-        candidate.leave(true)
-        self.pending = Some({ candidate, quote, phase: OwnLine, })
+  }
+  let count = self.paths.length()
+  for at in 0..<count {
+    let alternative = self.paths[at]
+    if alternative.own_line is Some(line) {
+      if unit is (' ' | '\t' | '\r' | '\n') {
+        ignore(alternative.path.feed(unit, end))
+        ignore(line.recovered.feed(unit, end))
+        if unit is ('\r' | '\n') {
+          alternative.own_line = None
+          self.confirm_own_line(alternative, line)
+        }
+        continue
       }
+      alternative.own_line = None
+    }
+    if alternative.path.feed(unit, end) is Some(quote) &&
+      (alternative.protects & (1 << think_quote_index(quote))) == 0 {
+      let recovered = alternative.path.checkpoint_copy()
+      recovered.leave(true)
+      alternative.own_line = Some({ recovered, quote, })
+    }
   }
 }
 
@@ -430,7 +523,13 @@ fn ThinkCheckpoint::feed(
 fn ThinkCheckpoint::framing(
   self : ThinkCheckpoint,
 ) -> (FrameScanner, Int32, Bool) {
-  let path = self.current
+  // At the current EOF, every undecided quote still protects its string.
+  // The disjoint hypotheses always include this assignment.
+  let mut index = 0
+  while self.paths[index].recovers != 0 {
+    index += 1
+  }
+  let path = self.paths[index].path
   let state = path.visible
   let trailing = state.trailing || (path.depth == 0 && path.marker is Some(_))
   (state.frame, state.stable_offset, trailing)

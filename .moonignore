@@ -30,6 +30,7 @@
 !/scaling_bench_test.mbt
 !/think_test.mbt
 !/think_bench_wbtest.mbt
+!/think_recovery_wbtest.mbt
 !/patch_test.mbt
 
 !/cmd/

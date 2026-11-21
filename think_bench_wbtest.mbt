@@ -184,6 +184,80 @@ test "incremental status matches masked reference across every code-unit cut" {
 }
 
 ///|
+fn verify_overlapping_think_recovery(
+  source : String,
+  expected_json : String,
+  max_chunk : UInt32,
+  seed : UInt32,
+) -> Unit raise {
+  let policy = checkpoint_policy()
+  let stream = RepairStream::with_policy(policy)
+  let mut state = seed
+  let mut start = 0
+  while start < source.length() {
+    state = state ^ (state << 13)
+    state = state ^ (state >> 17)
+    state = state ^ (state << 5)
+    let width = 1 + (state % max_chunk).reinterpret_as_int()
+    let end = (start + width).min(source.length())
+    stream.push(source[:].exact_view(start~, end~).to_owned()).unwrap()
+    let prefix = source[:].exact_view(end~).to_owned()
+    let expected = reference_think_status(prefix, policy.options)
+    assert_eq(stream.status(), expected, msg=prefix)
+    assert_eq(stream.scanned_units(), end)
+    start = end
+  }
+  let expected = reference_think_status(source, policy.options)
+  assert_true(expected.stable, msg=source)
+  let batch = repair_with_policy(source, policy).unwrap()
+  assert_eq(batch.json, expected_json, msg=source)
+  assert_eq(stream.finalize().unwrap(), batch)
+  assert_eq(stream.status(), { ..expected, finalized: true, })
+  assert_eq(stream.scanned_units(), source.length())
+}
+
+///|
+test "incremental think status retains overlapping quote recovery checkpoints" {
+  let cases = [
+    (
+      "<think><think>{\"draft\":\"unfinished\n</think>\n{'next':'\n</think>\n{\"answer\":\"'body\"}",
+      "{\"answer\":\"'body\"}",
+    ),
+    (
+      "<think><think>{'draft':'unfinished\n</think>\n{\"next\":\"\n</think>\n{\"answer\":\"'body\"}",
+      "{\"answer\":\"'body\"}",
+    ),
+    (
+      "<think><think>{\"draft\":\"unfinished\n</think>\n{next:\\\"\n</think>\n{\"answer\":\"x\"}",
+      "{\"answer\":\"x\"}",
+    ),
+    (
+      "<ThInK><think>{\"draft\":\"unfinished\r\n\t</ThInK> \t\r\n{'next':'\r\n  </think>\t\r\n{\"answer\":\"'body\"}",
+      "{\"answer\":\"'body\"}",
+    ),
+    (
+      "<think><think><think>{\"draft\":\"unfinished\n</think>\n{'next':'\n</think>\n{\"answer\":\"'body\"}\n</think>\n{\"id\":9007199254740993}",
+      "{\"id\":9007199254740993}",
+    ),
+    (
+      "<think><think>{\"draft\":\"unfinished\n</think>\n{'next':'\n</think>\nprotected' }\n</think>\n{\"answer\":7}",
+      "{\"answer\":7}",
+    ),
+    (
+      "<think><think>{\"draft\":\"unfinished\n</think>\n{'next':'\n</think> same line\nliteral' }\n</think>\n{\"answer\":8}",
+      "{\"answer\":8}",
+    ),
+  ]
+  for inputs in cases {
+    let (source, expected_json) = inputs
+    verify_overlapping_think_recovery(source, expected_json, 1U, 127891247U)
+    for seed in [127891247U, 2654435769U, 2662295122U] {
+      verify_overlapping_think_recovery(source, expected_json, 19U, seed)
+    }
+  }
+}
+
+///|
 test "thought audit merge retains edit budgets at single and extraction boundaries" {
   let defaults = checkpoint_policy()
   let options = defaults.options

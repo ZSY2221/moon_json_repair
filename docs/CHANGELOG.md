@@ -2,12 +2,12 @@
 
 ## 0.3.0
 
-- 推理标签检查点随分片推进，兼容旧的批处理和默认策略。 / Incremental reasoning checkpoints retain the existing batch contract.
+- 推理标签检查点保留嵌套草稿中待决的单双引号恢复。 / Incremental reasoning checkpoints preserve overlapping recovery decisions for nested quoted drafts.
 - 增加 RFC 6902 增删改、RFC 6901 指针和字段封口状态。 / Add JSON Patch add, remove and replace operations and source-based field seals.
 - Native CLI 解析两种供应商的 SSE 工具调用分片，支持逐行 Patch 与严格退出码。 / Stream provider tool-call deltas through the Native CLI with patches and final exit status.
 - 浏览器同时运行 JS 与 Wasm GC，引擎可切换，实验台显示 Patch 和字段进度。 / Run both offline browser engines with live patch and field views.
 - 以固定 JSONTestSuite 版本扩充 RFC 8259 用例，并验证分片和 Patch 回放。 / Pin external RFC 8259 fixtures and exercise seeded patch replay.
-- 三后端各 691 项通过，5,200 个固定种子样本，Wasm GC 核心覆盖 2,124/2,133（99.58%）。 / 691 tests per backend, 5,200 seeded inputs, and 2,124/2,133 covered core points.
+- Wasm GC、JS 各 694 项通过，5,600 个固定种子样本，Wasm GC 核心覆盖 2,147/2,157（99.54%）。 / 694 tests on each locally verified backend, 5,600 seeded inputs and 2,147/2,157 covered core points.
 
 ## 0.2.0
 
