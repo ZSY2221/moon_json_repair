@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,14 @@ const moduleName = moduleConfig.match(/^name\s*=\s*"([^"]+)"$/m)?.[1];
 const version = moduleConfig.match(/^version\s*=\s*"([^"]+)"$/m)?.[1];
 if (!moduleName || !version) throw new Error("Missing library module name or version.");
 
-const markdown = read(join(librarySource, "README.md"));
-const code = [...markdown.matchAll(/^```(?:moonbit|mbt)\n([\s\S]*?)^```/gm)].map((match) => match[1].trim());
+const codeBlocks = (markdown) =>
+  [...markdown.matchAll(/^```(?:moonbit|mbt)\n([\s\S]*?)^```/gm)].map((match) => match[1].trim());
+const code = codeBlocks(read(join(librarySource, "README.md")));
+const chineseReadme = join(librarySource, "README.zh-CN.md");
+const hasChineseReadme = existsSync(chineseReadme);
+if (hasChineseReadme && JSON.stringify(codeBlocks(read(chineseReadme))) !== JSON.stringify(code)) {
+  throw new Error("README.zh-CN.md and README.md must contain the same verified MoonBit examples.");
+}
 const manifests = code.filter((block) => block.startsWith("import {"));
 const examples = code.filter((block) => !block.startsWith("import {"));
 if (manifests.length !== 1 || examples.length === 0) {
@@ -72,7 +78,8 @@ try {
 
   runMoon(["check", "--deny-warn", "--target", target, "--package-path", "consumer"], scratch);
   runMoon(["test", "--deny-warn", "--target", target, "--package", "local/readme_consumer"], scratch);
-  console.log("Compiled README.md's import block and " + examples.length + " API examples as a separate " + target + " consumer.");
+  const documents = hasChineseReadme ? "Both README translations" : "README.md";
+  console.log(documents + " share the import block and " + examples.length + " API examples verified by a separate " + target + " consumer.");
 } finally {
   const created = realpathSync(scratch);
   if (dirname(created) !== tempRoot || !basename(created).startsWith(prefix)) {

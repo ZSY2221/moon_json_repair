@@ -168,6 +168,34 @@ test "apply patches as a tool field seals" {
 
 ```mbt check
 ///|
+test "inspect semantic repair before invoking a tool" {
+  let input =
+    #|{"userName":"Ada","currency":"usd"}
+  let schema : Json = {
+    "type": "object",
+    "required": ["user_name", "currency"],
+    "properties": {
+      "user_name": { "type": "string" },
+      "currency": { "enum": ["USD", "EUR"] },
+    },
+  }
+  let repaired = @json_repair.repair(input).unwrap()
+  let recovered = @json_repair.coerce_with_schema_semantic(
+    repaired.value,
+    schema,
+  )
+  assert_true(@json_repair.validate(recovered.value, schema).is_empty())
+  let errors = @json_repair.validate(repaired.value, schema)
+  let rendered = @json_repair.render_diagnostic(
+    input,
+    @json_repair.SourceDiagnostic::Schema(errors[0]),
+  )
+  assert_true(rendered.contains("^"))
+}
+```
+
+```mbt check
+///|
 test "guard a tool call and preserve exact decimal text" {
   let schemas : Json = {
     "sum": {

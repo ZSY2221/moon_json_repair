@@ -1,5 +1,16 @@
 # 更新记录 / Changelog
 
+## 0.5.0
+
+- 新增源码行号、UTF-16 感知标注、修复建议和彩色终端输出。 / Render repair and Schema diagnostics with source lines, UTF-16-aware carets, suggestions, and optional ANSI color.
+- 显式启用 Schema 语义自愈。键名与枚举只采纳可确定的匹配，并保留变更审计。 / Opt into audited semantic recovery for unambiguous keys and enum values.
+- 新增独立 JS/TS Wasm GC SDK，支持修复、提取、流式补丁和 MCP。 / Add a standalone JS/TS Wasm GC SDK for batch repair, extraction, stream patches, and MCP.
+- 演练台新增无刷新中英切换、实时界面对决与固定种子混沌压测。 / Switch the workbench language in place, compare live stream renderers, and profile deterministic edge cases.
+- 为超长输入、深层嵌套和密集转义设置前端预算。 / Bound long pastes, deep nesting, and escape-heavy inputs before invoking a browser engine.
+- 用独立 MoonBit 网关、JS/TS SDK 和 MCP 管道示例覆盖三种接入方式，纳入 CI。 / Exercise the independent MoonBit gateway, JS/TS SDK, and MCP pipeline in CI.
+
+- Wasm GC 和 JS 各通过 908 项。核心覆盖率 3,233/3,243（99.69%）。新增 512 条固定种子语义回归，核心累计 7,264 条。 / Wasm GC and JS each pass 908 tests. Core coverage is 3,233/3,243 (99.69%), with 512 new seeded semantic cases and 7,264 seeded core cases overall.
+
 ## 0.4.0
 
 - 流式预览复用可证明安全的解析检查点，保留原有报告和审计语义。 / Reuse safe parsing checkpoints for streaming previews and preserve report and audit semantics.

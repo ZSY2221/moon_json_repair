@@ -37,6 +37,10 @@ jobs:
         run: node tools/verify-readme.mjs "$GITHUB_WORKSPACE" "$TARGET"
         env:
           TARGET: ${{ matrix.backend }}
+      - name: Run the independent gateway and Native MCP examples
+        run: node tools/verify-examples.mjs "$TARGET"
+        env:
+          TARGET: ${{ matrix.backend }}
       - run: moon doc
         if: matrix.backend == 'wasm-gc'
       - run: moon package --list
@@ -46,8 +50,26 @@ jobs:
       - name: Verify both generated playground engines
         run: node tools/playground-engine-smoke.mjs
         if: matrix.backend == 'js'
+      - name: Run the offline browser example with the compiled Wasm GC engine
+        run: node tools/verify-examples.mjs --browser
+        if: matrix.backend == 'js'
+      - name: Build and verify the Wasm GC SDK and TypeScript integration example
+        run: |
+          node packages/json-repair-wasm/build.mjs
+          node --test packages/json-repair-wasm/index.test.mjs
+          node examples/02-ts-wasm-gc-sdk/main.mts
+        if: matrix.backend == 'js'
       - name: Verify corpus outcomes against strict JSON
-        run: node tools/eval-corpus.mjs
+        run: node tools/eval-corpus.mjs --sdk
+        if: matrix.backend == 'js'
+      - uses: actions/setup-node@v6
+        if: matrix.backend == 'js'
+        with:
+          node-version: 22
+      - name: Verify the same SDK artifact and TypeScript example on Node 22
+        run: |
+          node --test packages/json-repair-wasm/index.test.mjs
+          node examples/02-ts-wasm-gc-sdk/main.mts
         if: matrix.backend == 'js'
       - name: Verify real Native pipes and exit codes
         run: node tools/cli-smoke.mjs
