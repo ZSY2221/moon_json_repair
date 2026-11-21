@@ -17,8 +17,9 @@ pub fn CoercionOptions::default() -> CoercionOptions {
 }
 
 ///|
-/// One type change at an instance path. Array wrapping is logged before any
-/// subsequent conversion of its element.
+/// One change at an instance path. Wrapping precedes edits on the element.
+/// A `rename_key` edit identifies the destination path and carries the old
+/// and new key names as JSON strings.
 #derive(Eq, Debug)
 pub struct CoercionEdit {
   path : String
@@ -40,7 +41,7 @@ pub impl ToJson for CoercionEdit with fn to_json(self) {
 }
 
 ///|
-/// The coerced value, its compact JSON text, the ordered type changes, and
+/// The coerced value, its compact JSON text, the ordered audit changes, and
 /// the remaining validation errors. Inspect errors before executing a tool.
 #derive(Eq, Debug)
 pub struct CoercionReport {
@@ -71,11 +72,22 @@ pub fn coerce_with_schema(
   schema : JsonValue,
   options~ : CoercionOptions = CoercionOptions::default(),
 ) -> CoercionReport {
+  coerce_report(value, schema, options, semantic=None)
+}
+
+///|
+fn coerce_report(
+  value : Json,
+  schema : Json,
+  options : CoercionOptions,
+  semantic~ : SemanticCoercionOptions?,
+) -> CoercionReport {
   let errors : Array[ValidationError] = []
   let edits : Array[CoercionEdit] = []
   check_schema(schema, "$schema", 0, errors)
   let repaired = if errors.is_empty() {
-    let repaired = coerce_node(value, schema, "$", options, edits)
+    let context = semantic.map(options => { options, errors, })
+    let repaired = coerce_node(value, schema, "$", options, edits, context)
     validate_node(repaired, schema, "$", (error, _, _) => errors.push(error))
     repaired
   } else {
@@ -131,9 +143,20 @@ fn coerce_node(
   path : String,
   options : CoercionOptions,
   edits : Array[CoercionEdit],
+  context : SemanticContext?,
 ) -> Json {
   guard schema is Object(rules) else { return value }
   let target = explicit_type(rules)
+  if context is Some(context) && value is String(text) {
+    if normalize_enum(text, schema, rules, context.options) is Some(after) {
+      edits.push({ path, kind: "normalize_enum", before: value, after, })
+      return after
+    }
+    if context.options.trim_padding &&
+      trim_scalar(text, target, schema, path, options, edits) is Some(after) {
+      return after
+    }
+  }
   if coerce_atom(value, target, options) is Some((kind, after)) {
     edits.push({ path, kind, before: value, after, })
     return after
@@ -142,9 +165,15 @@ fn coerce_node(
     Object(fields) if rules.get("properties") is Some(Object(properties)) => {
       let names = properties.keys().collect()
       names.sort_by(String::lexical_compare)
-      let mut updated = None
+      let renamed = if context is Some(context) && context.options.fuzzy_keys {
+        recover_keys(fields, properties, names, path, context.errors, edits)
+      } else {
+        None
+      }
+      let current = renamed.unwrap_or(fields)
+      let mut updated = renamed
       for name in names {
-        if fields.get(name) is Some(child) {
+        if current.get(name) is Some(child) {
           let count = edits.length()
           let result = coerce_node(
             child,
@@ -152,6 +181,7 @@ fn coerce_node(
             schema_key_path(path, name),
             options,
             edits,
+            context,
           )
           if edits.length() != count {
             let copy = updated.unwrap_or_else(() => fields.copy())
@@ -175,6 +205,7 @@ fn coerce_node(
           "\{path}[\{index}]",
           options,
           edits,
+          context,
         )
         if edits.length() != count {
           let copy = updated.unwrap_or_else(() => items.copy())
@@ -188,8 +219,19 @@ fn coerce_node(
       }
     }
     String(_) | Number(_, ..) | True | False if target == Some("array") &&
-      options.wrap_scalar_arrays =>
-      wrap_scalar(value, schema, rules.get("items"), path, options, edits)
+      (
+        options.wrap_scalar_arrays ||
+        (context is Some(context) && context.options.wrap_singletons)
+      ) =>
+      wrap_scalar(
+        value,
+        schema,
+        rules.get("items"),
+        path,
+        options,
+        edits,
+        context,
+      )
     _ => value
   }
 }
@@ -209,13 +251,25 @@ fn wrap_scalar(
   path : String,
   options : CoercionOptions,
   edits : Array[CoercionEdit],
+  context : SemanticContext?,
 ) -> Json {
   let item_edits : Array[CoercionEdit] = []
   let item = match item_schema {
     Some(rule) => {
       // Coerce the element type without speculative nested wrapping.
       let element_options = { ..options, wrap_scalar_arrays: false, }
-      coerce_node(value, rule, "\{path}[0]", element_options, item_edits)
+      let element_context = context.map(context => {
+        let options = { ..context.options, wrap_singletons: false, }
+        { ..context, options, }
+      })
+      coerce_node(
+        value,
+        rule,
+        "\{path}[0]",
+        element_options,
+        item_edits,
+        element_context,
+      )
     }
     None => value
   }
@@ -241,11 +295,38 @@ let retry_issue_limit : Int32 = 16
 /// values, and validated examples when available. Large values are summarized.
 /// Valid arguments produce an empty string.
 pub fn format_retry_prompt(value : JsonValue, schema : JsonValue) -> String {
+  build_retry_prompt(value, schema, [])
+}
+
+///|
+/// Format a retry prompt including semantic key conflicts from this report.
+/// Supply the same schema used to create the report.
+pub fn CoercionReport::format_retry_prompt(
+  self : CoercionReport,
+  schema : JsonValue,
+) -> String {
+  build_retry_prompt(self.value, schema, self.errors[:])
+}
+
+///|
+fn build_retry_prompt(
+  value : Json,
+  schema : Json,
+  recovery_errors : ArrayView[ValidationError],
+) -> String {
   let definitions : Array[ValidationError] = []
   check_schema(schema, "$schema", 0, definitions)
   let issues : Array[Json] = []
   let mut count = 0
   if definitions.is_empty() {
+    for error in recovery_errors {
+      if error.keyword == "ambiguous_key" || error.keyword == "key_collision" {
+        count += 1
+        if issues.length() < retry_issue_limit {
+          issues.push(retry_issue(error, None, Json::boolean(false)))
+        }
+      }
+    }
     validate_node(value, schema, "$", (error, actual, rule) => {
       count += 1
       if issues.length() < retry_issue_limit {

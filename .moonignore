@@ -1,9 +1,14 @@
-# Allowlist the library, checked examples, and MoonBit entry points.
+# Allowlist the library, documentation, and MoonBit entry points.
 /*
 /deliverables/
 /web/
+/examples/
+/packages/
+/tools/
+/corpus/
 !/LICENSE
 !/README.md
+!/README.zh-CN.md
 !/README.mbt.md
 !/moon.mod
 !/moon.pkg
@@ -15,6 +20,8 @@
 !/extraction.mbt
 !/schema.mbt
 !/coercion.mbt
+!/semantic_coercion.mbt
+!/diagnostic.mbt
 !/stream.mbt
 !/think.mbt
 !/incremental_think.mbt
@@ -26,6 +33,8 @@
 !/repair_bench_test.mbt
 !/schema_test.mbt
 !/coercion_test.mbt
+!/semantic_coercion_test.mbt
+!/diagnostic_wbtest.mbt
 !/core_extension_test.mbt
 !/fuzz_test.mbt
 !/legacy_coverage_test.mbt
@@ -44,6 +53,7 @@
 /cmd/cli/*
 !/cmd/cli/cli.mbt
 !/cmd/cli/cli_test.mbt
+!/cmd/cli/diagnostic_cli_test.mbt
 !/cmd/cli/sse.mbt
 !/cmd/cli/sse_gateway.mbt
 !/cmd/cli/sse_wbtest.mbt
@@ -60,5 +70,6 @@
 /cmd/playground/*
 !/cmd/playground/playground.mbt
 !/cmd/playground/playground_tools.mbt
+!/cmd/playground/sdk_stream.mbt
 !/cmd/playground/moon.pkg
 !/cmd/playground/pkg.generated.mbti

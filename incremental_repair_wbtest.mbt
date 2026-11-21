@@ -416,3 +416,197 @@ test "checkpoint supports standalone atoms and repeated string snapshots" {
   assert_eq(repeated.report, initial.report)
   assert_true(repeated.patches.is_empty())
 }
+
+///|
+test "checkpoint empty snapshot can resume on the first argument frame" {
+  let stream = RepairStream::new()
+  assert_true(stream.preview() is Err({ kind: EmptyInput, .. }))
+  assert_true(stream.next_patches() is Err({ kind: EmptyInput, .. }))
+  let input =
+    #|{"argument":"ready"
+  stream.push(input).unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.patches.length(), 1)
+  assert_eq(frame.patches[0].path, "")
+  assert_eq(frame.report.json, "{\"argument\":\"ready\"}")
+}
+
+///|
+test "checkpoint input overflow preserves the accepted UTF-16 prefix and Patch baseline" {
+  let input = "{\"text\":\"😀\"}"
+  let limits = { ..RepairLimits::default(), max_input: input.length(), }
+  let stream = RepairStream::new(limits~)
+  stream.push(input).unwrap()
+  let prior = stream.next_patches().unwrap()
+  let limit = stream.push(" ").unwrap_err()
+  assert_eq(limit.kind, InputLimit)
+  assert_eq(limit.position.offset, input.length())
+  assert_eq(stream.scanned_units(), input.length())
+  let current = stream.next_patches().unwrap()
+  assert_eq(current.report, prior.report)
+  assert_eq(current.fields, prior.fields)
+  assert_true(current.patches.is_empty())
+}
+
+///|
+test "checkpoint stops at the depth limit and preserves the reference error position" {
+  let policy = RepairPolicy::default()
+  let policy = {
+    ..policy,
+    options: {
+      ..policy.options,
+      limits: { ..policy.options.limits, max_depth: 3, },
+    },
+  }
+  let stream = RepairStream::with_policy(policy)
+  stream.push("[[[0").unwrap()
+  assert_true(stream.repair_checkpoint is Some(_))
+  assert_eq(stream.preview().unwrap().json, "[[[0]]]")
+  stream.push(",[").unwrap()
+  assert_true(stream.repair_checkpoint is None)
+  let input = "[[[0,["
+  let expected = repair_with_policy(input, policy).unwrap_err()
+  assert_eq(expected.kind, DepthLimit)
+  assert_eq(stream.preview(), Err(expected))
+  assert_eq(stream.next_patches(), Err(expected))
+}
+
+///|
+test "checkpoint maintains sealed escaped keys when a root object grows" {
+  let stream = RepairStream::new()
+  stream.push("{\"epoch\":\"A\"").unwrap()
+  ignore(stream.next_patches().unwrap())
+  stream.push(",\"id~\\u002fkey\":\"B\"").unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.patches, [
+    { op: "add", path: "/id~0~1key", value: Some(Json::string("B")), },
+  ])
+  assert_eq(frame.fields, [
+    { pointer: "/epoch", is_sealed: true, },
+    { pointer: "/id~0~1key", is_sealed: true, },
+    { pointer: "", is_sealed: false, },
+  ])
+}
+
+///|
+test "checkpoint emits exact numeric lexemes for an appended root array member" {
+  let stream = RepairStream::new()
+  stream.push("[0,").unwrap()
+  ignore(stream.next_patches().unwrap())
+  stream.push("9007199254740993,").unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.patches.length(), 1)
+  assert_eq(frame.patches[0].path, "/1")
+  assert_eq(frame.patches[0].op, "add")
+  assert_eq(frame.patches[0].value.unwrap().stringify(), "9007199254740993")
+}
+
+///|
+test "checkpoint accepts a low surrogate that arrives after an invalid preview" {
+  let stream = RepairStream::new()
+  let emoji = "😀"
+  let high = emoji.unsafe_substring(start=0, end=1)
+  let low = emoji.unsafe_substring(start=1, end=2)
+  stream.push("{\"text\":\"" + high).unwrap()
+  assert_true(stream.preview() is Err({ kind: InvalidUnicode, .. }))
+  assert_true(stream.next_patches() is Err({ kind: InvalidUnicode, .. }))
+  stream.push(low + "\"}").unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.report.json, "{\"text\":\"😀\"}")
+  assert_eq(frame.patches[0].path, "")
+  assert_true(frame.report.edits.is_empty())
+}
+
+///|
+test "checkpoint preserves original CRLF and escape spans across an emoji" {
+  let stream = RepairStream::new()
+  let prefix = "{\"text\":\"😀\r"
+  stream.push(prefix).unwrap()
+  stream.push("\n\\u").unwrap()
+  let input = prefix + "\n\\u"
+  let report = stream.preview().unwrap()
+  assert_eq(report, repair(input).unwrap())
+  assert_eq(report.edits[0].position, { offset: 11, line: 1, column: 12, })
+  assert_eq(report.edits[1].position, { offset: 12, line: 2, column: 1, })
+  assert_eq(report.edits[2].position, { offset: 13, line: 2, column: 1, })
+  assert_eq(report.edits[2].kind, EscapeBackslash)
+}
+
+///|
+test "checkpoint root scalar extensions keep decimal spelling exactly" {
+  let stream = RepairStream::new()
+  stream.push("1.2300").unwrap()
+  let initial = stream.next_patches().unwrap()
+  assert_eq(initial.patches[0].value.unwrap().stringify(), "1.2300")
+  stream.push("e-12").unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.report.json, "1.2300e-12")
+  assert_eq(frame.patches[0].value.unwrap().stringify(), "1.2300e-12")
+  assert_false(frame.fields[0].is_sealed)
+}
+
+///|
+test "checkpoint respects the string and container edit budget across attempts" {
+  let limits = { ..RepairLimits::default(), max_edits: 1, }
+  let stream = RepairStream::new(limits~)
+  stream.push("{\"value\":\"a").unwrap()
+  assert_true(stream.preview() is Err({ kind: EditLimit, .. }))
+  assert_true(stream.next_patches() is Err({ kind: EditLimit, .. }))
+  stream.push("\"").unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.report.json, "{\"value\":\"a\"}")
+  assert_eq(frame.report.edits.map(edit => edit.kind), [CloseObject])
+  assert_eq(frame.patches[0].path, "")
+}
+
+///|
+test "checkpoint finalized input can reset without retaining a previous patch anchor" {
+  let stream = RepairStream::new()
+  stream.push("{\"old\":[1,2").unwrap()
+  ignore(stream.next_patches().unwrap())
+  ignore(stream.finalize().unwrap())
+  assert_true(stream.push("]}") is Err({ kind: UnexpectedToken, .. }))
+  stream.reset()
+  assert_false(stream.status().finalized)
+  assert_eq(stream.scanned_units(), 0)
+  stream.push("{\"new\":true}").unwrap()
+  let frame = stream.next_patches().unwrap()
+  assert_eq(frame.patches.length(), 1)
+  assert_eq(frame.patches[0].path, "")
+  assert_eq(frame.report.json, "{\"new\":true}")
+}
+
+///|
+test "checkpoint refuses a speculative escape tail when its wrapper is not a single value" {
+  // The producer normally accepts only incomplete escape text. Supply a
+  // malformed internal tail to verify the snapshot's defensive fallback.
+  let checkpoint = RepairCheckpoint::new(RepairLimits::default())
+  assert_true(checkpoint.feed("\"kept\\"[:]))
+  guard checkpoint.token is QuotedToken(quoted) else {
+    abort("expected an incomplete quoted token")
+  }
+  quoted.raw_escape.write_string("n\" 0")
+  assert_true(quoted.escape_tail() is None)
+  assert_true(checkpoint.snapshot(true) is None)
+}
+
+///|
+test "checkpoint rejects a committed-root hint for a non-container result" {
+  let checkpoint = RepairCheckpoint::new(RepairLimits::default())
+  assert_true(checkpoint.feed("[0,"[:]))
+  let previous = checkpoint.snapshot(true).unwrap()
+  // Only an open container normally issues this hint. If a future producer
+  // violates the contract, the general diff still replaces the root value.
+  let report = repair("9007199254740993").unwrap()
+  let next = { ..previous, report, }
+  let patches = checkpoint_patches(
+    previous.report.value,
+    previous.hint,
+    next,
+    checkpoint,
+  )
+  assert_eq(patches.length(), 1)
+  assert_eq(patches[0].op, "replace")
+  assert_eq(patches[0].path, "")
+  assert_eq(patches[0].value.unwrap().stringify(), report.json)
+}

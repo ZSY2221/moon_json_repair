@@ -15,15 +15,23 @@ pub fn merge_status(Int32, Int32) -> Int32
 
 pub fn parse_args(ArrayView[String]) -> Options raise CliFailure
 
+pub fn parse_args_with_diagnostics(ArrayView[String]) -> (Options, DiagnosticFormat) raise CliFailure
+
 pub fn parse_schema(String) -> @json.Json raise CliFailure
 
 pub fn parse_tool_schemas(String) -> @json_repair.ToolSchemaRegistry raise CliFailure
 
 pub fn prepare_input(String, Options) -> Result[PreparedInput, @json.Json]
 
+pub fn prepare_input_with_diagnostics(String, Options, DiagnosticFormat) -> Result[PreparedInput, @json.Json]
+
 pub fn present(PreparedInput, @json.Json?, Options) -> Outcome
 
+pub fn present_with_diagnostics(PreparedInput, @json.Json?, Options, String, DiagnosticFormat, schema_source? : String?) -> Outcome
+
 pub fn process_line(BatchLine, @json.Json?, Options) -> Outcome
+
+pub fn process_line_with_diagnostics(BatchLine, @json.Json?, Options, DiagnosticFormat, schema_source? : String?) -> Outcome
 
 pub fn process_mcp_line(BatchLine, @json_repair.ToolSchemaRegistry, Options) -> (String?, Int32)
 
@@ -44,6 +52,12 @@ pub struct BatchLines {
 pub fn BatchLines::finish(Self) -> BatchLine?
 pub fn BatchLines::new(max_chars~ : Int32) -> Self
 pub fn BatchLines::next(Self, BytesView, Int32) -> (Int32, BatchLine?)
+
+pub enum DiagnosticFormat {
+  Structured
+  Pretty
+  Ansi
+}
 
 pub struct Options {
   input : String?

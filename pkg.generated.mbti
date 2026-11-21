@@ -11,6 +11,8 @@ pub fn apply_json_patches(@json.Json, ArrayView[JsonPatch]) -> Result[@json.Json
 
 pub fn coerce_with_schema(@json.Json, @json.Json, options? : CoercionOptions) -> CoercionReport
 
+pub fn coerce_with_schema_semantic(@json.Json, @json.Json, options? : SemanticCoercionOptions) -> CoercionReport
+
 pub fn diff_json_patches(@json.Json, @json.Json) -> Array[JsonPatch]
 
 pub fn extract_all(String, RepairOptions) -> Result[Array[ExtractedBlock], RepairError]
@@ -20,6 +22,12 @@ pub fn extract_all_with_policy(String, RepairPolicy) -> Result[Array[ExtractedBl
 pub fn format_retry_prompt(@json.Json, @json.Json) -> String
 
 pub fn guard_mcp_tool_call(String, ToolSchemaRegistry, policy? : RepairPolicy, coerce? : Bool) -> McpGuardResult
+
+pub fn render_diagnostic(String, SourceDiagnostic, ansi? : Bool, chinese? : Bool) -> String
+
+pub fn render_diagnostics(String, Array[SourceDiagnostic], ansi? : Bool, chinese? : Bool) -> String
+
+pub fn render_repair_audit(String, Array[RepairEdit], ansi? : Bool, chinese? : Bool) -> String
 
 pub fn repair(String, limits? : RepairLimits) -> Result[RepairReport, RepairError]
 
@@ -48,6 +56,7 @@ pub(all) struct CoercionOptions {
   wrap_scalar_arrays : Bool
 }
 pub fn CoercionOptions::default() -> Self
+pub fn CoercionOptions::with_semantic(Self) -> SemanticCoercionOptions
 
 #derive(Eq, @debug.Debug)
 pub struct CoercionReport {
@@ -56,6 +65,7 @@ pub struct CoercionReport {
   edits : Array[CoercionEdit]
   errors : Array[ValidationError]
 }
+pub fn CoercionReport::format_retry_prompt(Self, @json.Json) -> String
 pub impl @json.ToJson for CoercionReport
 
 #derive(Eq, @debug.Debug, @json.ToJson)
@@ -204,6 +214,21 @@ pub fn RepairStream::status(Self) -> StreamStatus
 pub fn RepairStream::with_options(RepairOptions) -> Self
 pub fn RepairStream::with_policy(RepairPolicy) -> Self
 pub fn RepairStream::with_uncached_policy(RepairPolicy) -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) struct SemanticCoercionOptions {
+  base : CoercionOptions
+  fuzzy_keys : Bool
+  enum_case : Bool
+  trim_padding : Bool
+  wrap_singletons : Bool
+}
+
+pub(all) enum SourceDiagnostic {
+  Repair(RepairError)
+  Edit(RepairEdit)
+  Schema(ValidationError)
+}
 
 #derive(Eq, @debug.Debug, @json.ToJson)
 pub(all) struct SourcePosition {

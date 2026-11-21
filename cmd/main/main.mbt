@@ -14,6 +14,8 @@ let usage : String =
   #|  --json5          Allow the supported JSON5-style repair syntax.
   #|  --coerce         Coerce schema-typed numeric and Boolean strings.
   #|  --retry-prompt   Include a repair prompt for schema errors.
+  #|  --diagnostic-format json|pretty|ansi
+  #|                   Print optional source diagnostics for JSON/NDJSON input.
   #|  --strict-exit    Return 1 for input errors or 3 for schema/parameter errors.
   #|
   #|--coerce requires --schema or --mcp-guard. --retry-prompt requires --schema.
@@ -69,20 +71,47 @@ async fn read_path(
 }
 
 ///|
-async fn read_schema(path : String?, max_chars : Int32) -> Json? {
+priv struct LoadedSchema {
+  value : Json?
+  source : String?
+}
+
+///|
+async fn read_schema(path : String?, max_chars : Int32) -> LoadedSchema {
   match path {
-    None => None
-    Some(path) =>
-      Some(@cli.parse_schema(read_path(Some(path), "schema", max_chars, false)))
+    None => { value: None, source: None, }
+    Some(path) => {
+      let source = read_path(Some(path), "schema", max_chars, false)
+      { value: Some(@cli.parse_schema(source)), source: Some(source), }
+    }
+  }
+}
+
+///|
+async fn write_source_diagnostics(report : Json) -> Unit {
+  if report is { "error": { "diagnostic": String(text), .. }, .. } {
+    @stdio.stderr.text.write(text)
+  }
+  if report is { "repair_diagnostic": String(text), .. } {
+    @stdio.stderr.text.write(text)
+  }
+  if report is { "schema_diagnostic": String(text), .. } {
+    @stdio.stderr.text.write(text)
+  }
+  if report is { "blocks": Array(blocks), .. } {
+    for block in blocks {
+      write_source_diagnostics(block)
+    }
   }
 }
 
 ///|
 async fn write_batch_line(
   record : @cli.BatchLine,
-  schema : Json?,
+  schema : LoadedSchema,
   options : @cli.Options,
   registry : @repair.ToolSchemaRegistry?,
+  format : @cli.DiagnosticFormat,
 ) -> Int32 {
   if registry is Some(registry) {
     let (frame, status) = @cli.process_mcp_line(record, registry, options)
@@ -91,18 +120,29 @@ async fn write_batch_line(
     }
     return status
   }
-  let outcome = @cli.process_line(record, schema, options)
-  @stdio.stdout.text.write("\{outcome.for_line(record.line).stringify()}\n")
+  let outcome = @cli.process_line_with_diagnostics(
+    record,
+    schema.value,
+    options,
+    format,
+    schema_source=schema.source,
+  )
+  let report = outcome.for_line(record.line)
+  if !(format is Structured) {
+    write_source_diagnostics(report)
+  }
+  @stdio.stdout.text.write("\{report.stringify()}\n")
   outcome.status
 }
 
 ///|
 async fn run_batch(
   reader : &@io.BinaryReader,
-  schema : Json?,
+  schema : LoadedSchema,
   options : @cli.Options,
   max_chars : Int32,
   registry : @repair.ToolSchemaRegistry?,
+  format : @cli.DiagnosticFormat,
 ) -> Int32 {
   let lines = @cli.BatchLines::new(max_chars~)
   let mut status = 0
@@ -114,7 +154,7 @@ async fn run_batch(
       if record is Some(record) {
         status = @cli.merge_status(
           status,
-          write_batch_line(record, schema, options, registry),
+          write_batch_line(record, schema, options, registry, format),
         )
       }
     }
@@ -122,7 +162,7 @@ async fn run_batch(
   if lines.finish() is Some(record) {
     status = @cli.merge_status(
       status,
-      write_batch_line(record, schema, options, registry),
+      write_batch_line(record, schema, options, registry, format),
     )
   }
   @cli.batch_exit_status(options, status)
@@ -167,20 +207,21 @@ async fn run_sse(
 ///|
 async fn run_pipe(
   reader : &@io.BinaryReader,
-  schema : Json?,
+  schema : LoadedSchema,
   options : @cli.Options,
   max_chars : Int32,
   registry : @repair.ToolSchemaRegistry?,
+  format : @cli.DiagnosticFormat,
 ) -> Int32 {
   if options.sse {
-    run_sse(reader, schema, options, max_chars)
+    run_sse(reader, schema.value, options, max_chars)
   } else {
-    run_batch(reader, schema, options, max_chars, registry)
+    run_batch(reader, schema, options, max_chars, registry, format)
   }
 }
 
 ///|
-async fn run(options : @cli.Options) -> Int32 {
+async fn run(options : @cli.Options, format : @cli.DiagnosticFormat) -> Int32 {
   let max_chars = @repair.RepairLimits::default().max_input
   if options.ndjson || options.sse || options.mcp_guard {
     let schema = read_schema(options.schema, max_chars)
@@ -194,28 +235,38 @@ async fn run(options : @cli.Options) -> Int32 {
         )
     }
     match options.input {
-      None => run_pipe(@stdio.stdin, schema, options, max_chars, registry)
+      None =>
+        run_pipe(@stdio.stdin, schema, options, max_chars, registry, format)
       Some(path) => {
         let file = @fs.open(path[:], mode=ReadOnly) catch {
           error =>
             @cli.fail_cli("io", "could not read input: \{error.to_string()}")
         }
         defer file.close()
-        run_pipe(file, schema, options, max_chars, registry)
+        run_pipe(file, schema, options, max_chars, registry, format)
       }
     }
   } else {
     let input = read_path(options.input, "input", max_chars, true)
-    let prepared = match @cli.prepare_input(input, options) {
+    let prepared = match
+      @cli.prepare_input_with_diagnostics(input, options, format) {
       Ok(prepared) => prepared
       Err(error) => raise @cli.CliFailure(error, 1)
     }
-    let outcome = @cli.present(
+    let schema = read_schema(options.schema, max_chars)
+    let outcome = @cli.present_with_diagnostics(
       prepared,
-      read_schema(options.schema, max_chars),
+      schema.value,
       options,
+      input,
+      format,
+      schema_source=schema.source,
     )
-    @stdio.stdout.text.write("\{outcome.report().stringify()}\n")
+    let report = outcome.report()
+    if !(format is Structured) {
+      write_source_diagnostics(report)
+    }
+    @stdio.stdout.text.write("\{report.stringify()}\n")
     outcome.status
   }
 }
@@ -228,11 +279,13 @@ async fn main {
       @stdio.stdout.text.write("\{usage}\n")
       0
     } else {
-      run(@cli.parse_args(args))
+      let (options, format) = @cli.parse_args_with_diagnostics(args)
+      run(options, format)
     }
   } catch {
     @cli.CliFailure(error, status) => {
       let output : Json = { "error": error }
+      write_source_diagnostics(output)
       @stdio.stderr.text.write("\{output.stringify()}\n")
       status
     }

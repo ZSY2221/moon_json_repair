@@ -40,6 +40,22 @@ pub fn[T] fail_cli(
 ///|
 /// Parse switches, check mode-specific prerequisites, and resolve stdin.
 pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
+  parse_args_with_diagnostics(args).0
+}
+
+///|
+/// Machine JSON alone, or JSON accompanied by plain or colored diagnostics.
+pub enum DiagnosticFormat {
+  Structured
+  Pretty
+  Ansi
+}
+
+///|
+/// Parse CLI switches including the optional diagnostic presentation format.
+pub fn parse_args_with_diagnostics(
+  args : ArrayView[String],
+) -> (Options, DiagnosticFormat) raise CliFailure {
   let mut options : Options = {
     input: None,
     schema: None,
@@ -56,6 +72,7 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
     strict_exit: false,
   }
   let mut positional_only = false
+  let mut diagnostic_format : DiagnosticFormat? = None
   for remaining = args {
     match remaining {
       [] => break
@@ -81,6 +98,31 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
       }
       ["--tool-schemas"] if !positional_only =>
         fail_cli("usage", "--tool-schemas requires a file path", status=2)
+      ["--diagnostic-format", format, .. rest] if !positional_only => {
+        if diagnostic_format is Some(_) {
+          fail_cli(
+            "usage",
+            "--diagnostic-format may only be supplied once",
+            status=2,
+          )
+        }
+        diagnostic_format = Some(
+          match format {
+            "json" => Structured
+            "pretty" => Pretty
+            "ansi" => Ansi
+            _ =>
+              fail_cli(
+                "usage",
+                "--diagnostic-format accepts json, pretty or ansi",
+                status=2,
+              )
+          },
+        )
+        continue rest
+      }
+      ["--diagnostic-format"] if !positional_only =>
+        fail_cli("usage", "--diagnostic-format requires a format", status=2)
       ["--", .. rest] if !positional_only => {
         positional_only = true
         continue rest
@@ -146,11 +188,20 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
   if options.emit_patches && !options.sse {
     fail_cli("usage", "--emit-patches requires --sse", status=2)
   }
-  if options.input == Some("-") {
+  let format = diagnostic_format.unwrap_or(Structured)
+  if !(format is Structured) && (options.sse || options.mcp_guard) {
+    fail_cli(
+      "usage",
+      "pretty diagnostics require single, extracted or NDJSON input",
+      status=2,
+    )
+  }
+  let options = if options.input == Some("-") {
     { ..options, input: None, }
   } else {
     options
   }
+  (options, format)
 }
 
 ///|
@@ -189,18 +240,47 @@ pub fn prepare_input(
   source : String,
   options : Options,
 ) -> Result[PreparedInput, Json] {
+  prepare_input_with_diagnostics(source, options, Structured)
+}
+
+///|
+fn prepare_error(
+  source : String,
+  error : @repair.RepairError,
+  format : DiagnosticFormat,
+) -> Json {
+  let fields = @json.to_json(error)
+  if !(format is Structured) && fields is Object(values) {
+    values["diagnostic"] = Json::string(
+      @repair.render_diagnostic(
+        source,
+        @repair.SourceDiagnostic::Repair(error),
+        ansi=format is Ansi,
+      ),
+    )
+  }
+  fields
+}
+
+///|
+/// Prepare input and, on rejection, build the requested source diagnostic.
+pub fn prepare_input_with_diagnostics(
+  source : String,
+  options : Options,
+  format : DiagnosticFormat,
+) -> Result[PreparedInput, Json] {
   let policy = cli_policy(options)
   if options.extract_all {
     match @repair.extract_all_with_policy(source, policy) {
       Ok(blocks) if blocks.is_empty() =>
         Err(error_json("no_blocks", "input did not contain a repairable block"))
       Ok(blocks) => Ok(Multiple(blocks))
-      Err(error) => Err(@json.to_json(error))
+      Err(error) => Err(prepare_error(source, error, format))
     }
   } else {
     match @repair.repair_with_policy(source, policy) {
       Ok(report) => Ok(Single(report))
-      Err(error) => Err(@json.to_json(error))
+      Err(error) => Err(prepare_error(source, error, format))
     }
   }
 }
@@ -237,6 +317,9 @@ fn present_report(
   report : @repair.RepairReport,
   schema : Json?,
   options : Options,
+  source~ : String = "",
+  format~ : DiagnosticFormat = Structured,
+  schema_source~ : String? = None,
 ) -> Outcome {
   let (text, value, coercions, errors) = match schema {
     None => (report.json, report.value, Json::array([]), [])
@@ -283,6 +366,31 @@ fn present_report(
       },
     )
   }
+  if !(format is Structured) {
+    let ansi = format is Ansi
+    if !report.edits.is_empty() {
+      fields["repair_diagnostic"] = Json::string(
+        @repair.render_repair_audit(source, report.edits, ansi~),
+      )
+    }
+    if errors is [first, ..] {
+      let schema_text = if first.path.has_prefix("$schema") {
+        match schema {
+          Some(schema) => schema_source.unwrap_or(schema.stringify())
+          None => text
+        }
+      } else {
+        text
+      }
+      fields["schema_diagnostic"] = Json::string(
+        @repair.render_diagnostics(
+          schema_text,
+          errors.map(error => @repair.SourceDiagnostic::Schema(error)),
+          ansi~,
+        ),
+      )
+    }
+  }
   { fields, status: if errors.is_empty() { 0 } else { 3 }, }
 }
 
@@ -293,12 +401,33 @@ pub fn present(
   schema : Json?,
   options : Options,
 ) -> Outcome {
+  present_with_diagnostics(input, schema, options, "", Structured)
+}
+
+///|
+/// Add source audit and schema diagnostic text to the structured report.
+pub fn present_with_diagnostics(
+  input : PreparedInput,
+  schema : Json?,
+  options : Options,
+  source : String,
+  format : DiagnosticFormat,
+  schema_source~ : String? = None,
+) -> Outcome {
   match input {
-    Single(report) => present_report(report, schema, options)
+    Single(report) =>
+      present_report(report, schema, options, source~, format~, schema_source~)
     Multiple(blocks) => {
       let mut status = 0
       let reports = blocks.map(block => {
-        let outcome = present_report(block.report, schema, options)
+        let outcome = present_report(
+          block.report,
+          schema,
+          options,
+          source~,
+          format~,
+          schema_source~,
+        )
         status = merge_status(status, outcome.status)
         let fields = outcome.fields
         fields["start"] = @json.to_json(block.start)
@@ -347,12 +476,32 @@ pub fn process_line(
   schema : Json?,
   options : Options,
 ) -> Outcome {
+  process_line_with_diagnostics(line, schema, options, Structured)
+}
+
+///|
+/// Preserve physical-line JSON framing and include optional caret diagnostics.
+pub fn process_line_with_diagnostics(
+  line : BatchLine,
+  schema : Json?,
+  options : Options,
+  format : DiagnosticFormat,
+  schema_source~ : String? = None,
+) -> Outcome {
   match line.input {
     Err(error) => { fields: { "error": error }, status: 1, }
     Ok(source) =>
-      match prepare_input(source, options) {
+      match prepare_input_with_diagnostics(source, options, format) {
         Err(error) => { fields: { "error": error }, status: 1, }
-        Ok(input) => present(input, schema, options)
+        Ok(input) =>
+          present_with_diagnostics(
+            input,
+            schema,
+            options,
+            source,
+            format,
+            schema_source~,
+          )
       }
   }
 }
