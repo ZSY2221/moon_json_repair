@@ -134,7 +134,7 @@ fn lab_response(
 fn lab_result(
   source : String,
   schema_text : String,
-  options : @repair.RepairOptions,
+  policy : @repair.RepairPolicy,
   stream : @repair.RepairStream,
   coerce : Bool,
   extract : Bool,
@@ -146,7 +146,7 @@ fn lab_result(
       ignore(stream.finalize())
     }
     return lab_response(
-      @repair.extract_all(source, options).map(blocks => {
+      @repair.extract_all_with_policy(source, policy).map(blocks => {
         blocks.map(block => {
           lab_block(
             block.report,
@@ -185,9 +185,9 @@ fn lab_result(
 }
 
 ///|
-fn lab_options(json5 : Bool) -> @repair.RepairOptions {
+fn lab_policy(json5 : Bool, ignore_think : Bool) -> @repair.RepairPolicy {
   let base = @repair.RepairOptions::default()
-  { ..base, json5, }
+  { options: { ..base, json5, }, ignore_think_blocks: ignore_think, }
 }
 
 ///|
@@ -199,35 +199,36 @@ pub fn lab_run(
   json5 : Bool,
   coerce : Bool,
   extract : Bool,
+  ignore_think : Bool,
 ) -> String {
-  let options = lab_options(json5)
-  let stream = @repair.RepairStream::with_options(options)
+  let policy = lab_policy(json5, ignore_think)
+  let stream = @repair.RepairStream::with_policy(policy)
   match stream.push(source) {
     Err(error) => lab_response(Err(error), stream.status())
-    Ok(_) => lab_result(source, schema, options, stream, coerce, extract, false)
+    Ok(_) => lab_result(source, schema, policy, stream, coerce, extract, false)
   }
 }
 
 ///|
 priv struct LabSession {
-  options : @repair.RepairOptions
+  policy : @repair.RepairPolicy
   stream : @repair.RepairStream
 }
 
 ///|
 let current_lab_session : @ref.Ref[LabSession] = {
-  let options = lab_options(false)
-  @ref.Ref({ options, stream: @repair.RepairStream::with_options(options), })
+  let policy = lab_policy(false, false)
+  @ref.Ref({ policy, stream: @repair.RepairStream::with_policy(policy), })
 }
 
 ///|
 /// Start a new session without carrying over the previous document or framing state.
 #export_name("moonLabStreamStart")
-pub fn lab_stream_start(json5 : Bool) -> Unit {
-  let options = lab_options(json5)
+pub fn lab_stream_start(json5 : Bool, ignore_think : Bool) -> Unit {
+  let policy = lab_policy(json5, ignore_think)
   current_lab_session.val = {
-    options,
-    stream: @repair.RepairStream::with_options(options),
+    policy,
+    stream: @repair.RepairStream::with_policy(policy),
   }
 }
 
@@ -248,8 +249,8 @@ pub fn lab_stream_view(
   extract : Bool,
   finalize : Bool,
 ) -> String {
-  let { options, stream, } = current_lab_session.val
-  lab_result(source, schema, options, stream, coerce, extract, finalize)
+  let { policy, stream, } = current_lab_session.val
+  lab_result(source, schema, policy, stream, coerce, extract, finalize)
 }
 
 ///|

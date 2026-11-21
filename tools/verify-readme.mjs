@@ -78,5 +78,5 @@ try {
   if (dirname(created) !== tempRoot || !basename(created).startsWith(prefix)) {
     throw new Error("Unexpected README verification directory.");
   }
-  rmSync(created, { recursive: true, force: true });
+  rmSync(created, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
 }

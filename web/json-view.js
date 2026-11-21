@@ -138,6 +138,9 @@ function traceProjection(source, model, edits, start, end) {
   for (const { edit, index } of ordered) {
     const first = edit.position.offset;
     const last = edit.end_offset;
+    // Extraction can attach an ignored reasoning range outside this candidate.
+    // It has a source location and no counterpart in this block's JSON.
+    if (edit.kind === "ignore_think_block" && (last <= start || first >= end)) continue;
     if (first < cursor || last < first || last > end) return null;
     mapText(source.slice(cursor, first), cursor, first, false);
     if (!matches) return null;
@@ -186,7 +189,7 @@ function makeVisualAudit(source, block) {
     kind: edit.kind,
     location: "L" + edit.position.line + ":C" + edit.position.column,
     source: { start: edit.position.offset, end: edit.end_offset },
-    output: mapping ? remapOutput(mapping.ranges[index], before, after) : null,
+    output: mapping?.ranges[index] ? remapOutput(mapping.ranges[index], before, after) : null,
   }));
   for (const change of block.coercions) {
     const output = after.values.get(change.path);

@@ -11,16 +11,19 @@
   moon check --target js --deny-warn
   moon check --target wasm-gc --deny-warn
   moon check --target native --deny-warn
-  moon test --target js
-  moon test --target wasm-gc
-  moon test --target native
+  moon test --target js --deny-warn
+  moon test --target wasm-gc --deny-warn
+  moon test --target native --deny-warn
   moon doc
-  node tools/verify-readme.mjs
+  for target in wasm-gc js native; do node tools/verify-readme.mjs . "$target"; done
   node web/build.mjs
+  node tools/eval-corpus.mjs
+  node tools/cli-smoke.mjs
   moon package --list
+  moon package
   ```
 
-- [ ] 核对 `README.md` 的 API、CLI 与 Demo 步骤能从干净检出运行。打开 `web/index.html`，试跑六个案例，检查修复结果、位置日志和 Schema 通过或失败状态。发包清单依照 `.moonignore` 核对，保留库、测试、CLI、演练台桥接源码、README 和许可证。
+- [ ] 核对 `README.md` 的 API、CLI 与 Demo 步骤能从干净检出运行。打开 `web/index.html`，检查推理预设、审计跳转、Schema 状态和无损下载。归档按 `.moonignore` 核对，确认发布内容为库、测试、CLI、演练台桥接源码、README 和许可证。
 - [ ] 核对 `git status --short`、`git log --oneline` 和 `git remote -v`。将可复现的验证结果和实际开发记录留在公开仓库。
 
 ## 2. 推送 GitHub 并部署 Pages

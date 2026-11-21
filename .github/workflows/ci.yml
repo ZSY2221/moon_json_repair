@@ -40,3 +40,9 @@ jobs:
         if: matrix.backend == 'wasm-gc'
       - run: node web/build.mjs
         if: matrix.backend == 'js'
+      - name: Verify corpus outcomes against strict JSON
+        run: node tools/eval-corpus.mjs
+        if: matrix.backend == 'js'
+      - name: Verify real Native pipes and exit codes
+        run: node tools/cli-smoke.mjs
+        if: matrix.backend == 'native'

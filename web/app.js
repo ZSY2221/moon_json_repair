@@ -4,7 +4,7 @@ const elements = Object.fromEntries([
   "samples", "stream", "stream-label", "step", "replay", "speed", "stream-count",
   "stream-progress", "stream-stack", "stream-boundary", "source", "source-gutter",
   "source-marking", "source-meta", "source-state", "enable-json5", "enable-coercion",
-  "enable-extraction", "block-picker", "blocks", "output", "output-wrap",
+  "enable-extraction", "enable-ignore-think", "block-picker", "blocks", "output", "output-wrap",
   "result-gutter", "repair-state", "elapsed", "copy", "copy-label", "download",
   "audit-count", "audit-empty", "audit", "schema-state", "schema-summary",
   "schema-errors", "schema", "retry-card", "retry-prompt", "copy-retry", "benchmark",
@@ -42,6 +42,7 @@ function repairOptions() {
     elements["enable-json5"].checked,
     elements["enable-coercion"].checked,
     elements["enable-extraction"].checked,
+    elements["enable-ignore-think"].checked,
   ];
 }
 
@@ -323,6 +324,13 @@ function pausePlayback(message = "Stream paused") {
   scheduleRender();
 }
 
+function startLabSession() {
+  globalThis.moonLabStreamStart(
+    elements["enable-json5"].checked,
+    elements["enable-ignore-think"].checked,
+  );
+}
+
 function startPlayback(target) {
   resetPlayback();
   if (!target) return;
@@ -330,7 +338,7 @@ function startPlayback(target) {
   // chunks without pretending to use any provider's specific tokenizer.
   const tokens = target.match(/[\p{L}\p{N}_]{1,5}|[ \t]{1,4}|\r\n|[\s\S]/gu) ?? [];
   playback = { tokens, target, next: 0, done: false, playing: false, error: false, clock: 0, balance: 0 };
-  globalThis.moonLabStreamStart(elements["enable-json5"].checked);
+  startLabSession();
   elements.source.value = "";
   blockIndex = 0;
   auditIndex = -1;
@@ -405,6 +413,7 @@ function loadSample(index) {
   elements["enable-json5"].checked = Boolean(modes.json5);
   elements["enable-coercion"].checked = Boolean(modes.coerce);
   elements["enable-extraction"].checked = Boolean(modes.extract);
+  elements["enable-ignore-think"].checked = Boolean(modes.ignoreThink);
   elements.source.scrollTop = 0;
   elements["output-wrap"].scrollTop = 0;
   blockIndex = 0;
@@ -448,10 +457,10 @@ elements.source.addEventListener("input", () => {
   scheduleRender();
 });
 elements.schema.addEventListener("input", () => { auditIndex = -1; scheduleRender(); });
-for (const id of ["enable-json5", "enable-coercion", "enable-extraction"]) {
+for (const id of ["enable-json5", "enable-coercion", "enable-extraction", "enable-ignore-think"]) {
   elements[id].addEventListener("change", () => {
-    if (playback && id === "enable-json5") {
-      globalThis.moonLabStreamStart(elements[id].checked);
+    if (playback && (id === "enable-json5" || id === "enable-ignore-think")) {
+      startLabSession();
       globalThis.moonLabStreamPush(elements.source.value);
     }
     auditIndex = -1;

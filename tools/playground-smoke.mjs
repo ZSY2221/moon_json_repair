@@ -72,6 +72,7 @@ try {
 
   await outputHas("Investigate checkout timeout");
   await wait("#schema-state", "Pass");
+  assert.equal(await page.locator("#enable-ignore-think").isChecked(), false);
   const initial = await page.locator("#source").inputValue();
   await page.evaluate(() => {
     globalThis.schemaStates = [];
@@ -121,6 +122,79 @@ try {
   await wait("#repair-state", "Unable to repair");
   await page.locator("#enable-extraction").check();
   await wait("#blocks", "Block 3");
+
+  const reasoningPreset = "推理草稿 + 截断调用";
+  const thinkSwitch = page.locator("#enable-ignore-think");
+  const ignoredThink = page.locator("#audit button").filter({ hasText: "ignore_think_block" });
+  await sample(reasoningPreset);
+  const exactBody = await outputHas("9007199254740993");
+  await wait("#schema-state", "Pass");
+  assert.equal(exactBody.args.note, "Literal <think>marker</think>");
+  assert.equal(await thinkSwitch.isChecked(), true);
+  assert.equal(await blocks.count(), 2);
+  assert.equal(await ignoredThink.count(), 1);
+  const modelSource = await page.locator("#source").inputValue();
+  const reasoningEnd = modelSource.indexOf("</tHiNk>") + "</tHiNk>".length;
+  const reasoning = modelSource.slice(0, reasoningEnd);
+  assert.equal(await page.evaluate(source => (
+    window.moonLabRun(source, "", false, false, true) ===
+    window.moonLabRun(source, "", false, false, true, false)
+  ), modelSource), true, "Omitting the new browser flag preserves the previous entry point");
+  await ignoredThink.click();
+  assert.equal(await page.locator("#source-marking mark").textContent(), reasoning);
+  assert.equal(await page.locator("#output mark, #output .diff-anchor").count(), 0);
+  await blocks.nth(1).click();
+  await outputHas("Status 🌙");
+  await blocks.nth(0).click();
+  await outputHas("9007199254740993");
+  await page.locator("#source").evaluate(input => {
+    input.setSelectionRange(1, 2);
+    input.dispatchEvent(new PointerEvent("pointerup"));
+  });
+  assert.equal(await ignoredThink.getAttribute("aria-pressed"), "true");
+  assert.equal(await page.locator("#source-marking mark").textContent(), reasoning);
+
+  const thoughtDownloadEvent = page.waitForEvent("download");
+  await page.locator("#download").click();
+  const thoughtDownload = await thoughtDownloadEvent;
+  const thoughtRaw = await readFile(await thoughtDownload.path(), "utf8");
+  assert.match(thoughtRaw, /"account":9007199254740993(?=[,}])/);
+  assert.match(thoughtRaw, /"kind":"ignore_think_block"/);
+  assert.doesNotMatch(thoughtRaw, /draft_guess/);
+
+  await thinkSwitch.uncheck();
+  await outputHas("draft_guess");
+  await wait("#schema-state", "Fail");
+  assert.equal(await blocks.count(), 3);
+  await thinkSwitch.check();
+  await outputHas("9007199254740993");
+  await wait("#schema-state", "Pass");
+  assert.equal(await blocks.count(), 2);
+  await page.locator("#source").fill(reasoning.slice(0, -"</tHiNk>".length));
+  await wait("#blocks", "No candidate blocks");
+  assert.equal(await page.locator("#download").isDisabled(), true);
+
+  await sample(reasoningPreset);
+  await outputHas("9007199254740993");
+  await page.locator("#speed").selectOption("30");
+  await page.locator("#stream").click();
+  await page.waitForFunction(() => {
+    const prefix = document.getElementById("source").value;
+    return prefix.includes('"draft_guess"') && !prefix.includes("</tHiNk>");
+  });
+  await page.locator("#stream").click();
+  await wait("#blocks", "No candidate blocks");
+  await page.locator("#speed").selectOption("120");
+  await page.locator("#stream").click();
+  await wait("#stream-count", "Finalized");
+  await outputHas("9007199254740993");
+  assert.equal(await blocks.count(), 2);
+
+  await page.locator("#source").fill(modelSource.split("\n\n")[0]);
+  await page.locator("#enable-extraction").uncheck();
+  await outputHas("9007199254740993");
+  await ignoredThink.click();
+  assert.equal(await page.locator("#source-marking mark").textContent(), reasoning);
 
   await sample("Precision & coercion");
   await outputHas("9007199254740993");
@@ -179,12 +253,13 @@ try {
   assert.equal(await page.locator("#bench-progress").evaluate(bar => bar.value), 10_000);
 
   if (process.argv.includes("--screenshot")) {
-    await sample("Precision & coercion");
+    await sample(reasoningPreset);
     await outputHas("9007199254740993");
     await page.locator("#stream").click();
     await wait("#stream-count", "Finalized");
+    await outputHas("9007199254740993");
     await wait("#schema-state", "Pass");
-    await hex.click();
+    await ignoredThink.click();
     await page.evaluate(() => window.scrollTo(0, 0));
     const benchBounds = await page.locator(".benchmark").boundingBox();
     assert.ok(benchBounds.y + benchBounds.height <= 1080, "Benchmark must remain inside the capture.");
@@ -215,6 +290,7 @@ try {
   console.log("Subpath: " + site + " · 6 local assets · 0 HTTP errors and 0 console errors");
   console.log("Stream replay, pause, step, finalize, stack, and schema state changes verified.");
   console.log("Three extracted calls, JSON5, schema coercion, exact dual highlights, and retry prompt copy verified.");
+  console.log("Think mode: mixed-case tags, literal markers, open and streamed blocks, source projection, and exact download verified.");
   console.log("Lossless report retained the exact literal 9007199254740993 and was invalidated on empty input.");
   console.log("10,000 attempts per engine: " + await page.locator("#bench-repair").textContent() + " recovery vs " + await page.locator("#bench-strict").textContent() + " strict. " + await page.locator("#bench-repair-detail").textContent());
   console.log("390px viewport and offline file:// loading verified.");

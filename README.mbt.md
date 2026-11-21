@@ -113,3 +113,17 @@ test "coerce a numeric argument and request a precise retry" {
   assert_true(prompt.contains("$.currency"))
 }
 ```
+
+```mbt check
+///|
+test "ignore reasoning drafts before extracting a tool call" {
+  let policy = @json_repair.RepairOptions::default().with_ignore_think_blocks(
+    true,
+  )
+  let reply = "<THINK>{amount:99</THINK>\n{amount:2"
+  let blocks = @json_repair.extract_all_with_policy(reply, policy).unwrap()
+  assert_eq(blocks.length(), 1)
+  assert_eq(blocks[0].report.json, "{\"amount\":2}")
+  assert_eq(blocks[0].report.edits[0].action, "ignore think block")
+}
+```

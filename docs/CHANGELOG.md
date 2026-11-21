@@ -8,7 +8,10 @@
 - 实验室新增可控流式回放、双栏高亮、无损报告和万次浏览器基准 / Lab playback controls, paired highlights, lossless reports, and browser benchmarking.
 - 减少词法位置快照分配，分片内批量扫描普通字符串内容 / Reduce position snapshot allocations and scan ordinary streaming string units in runs.
 - 切换提取结果复用本次修复，Pages 从选定提交构建引擎 / Reuse repair output when switching blocks and rebuild the Pages engine from the selected commit.
-- 每后端 349 项通过。2,400 个固定种子样本，Wasm GC 核心覆盖 1,474/1,485 / 349 tests per backend, 2,400 seeded samples, and 1,474/1,485 Wasm GC coverage points.
+- 增加可选 `RepairPolicy` 推理块隔离，保留旧 API。单块、提取和流式入口共享原文审计坐标。 / Add opt-in `<think>` filtering with source audits across batch, extraction and streaming APIs.
+- Native CLI 支持 NDJSON、错误续跑、严格退出码、多块提取和 Schema 纠错。 / Add Native NDJSON pipelines, strict exit status, extraction and schema correction.
+- 演练台新增推理草稿预设与隔离开关，CI 验证 34 条固定语料和 Native 实际管道。 / Add the reasoning preset and verify the 34-case corpus and Native pipes in CI.
+- 每后端 382 项通过。2,400 个固定种子样本，Wasm GC 核心覆盖 1,655/1,682（98.4%）。 / 382 tests per backend, 2,400 seeded inputs and 1,655/1,682 Wasm GC coverage points (98.4%).
 
 ## 0.1.0
 

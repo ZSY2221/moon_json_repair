@@ -135,4 +135,31 @@ const labFixtures = [
       '{"tool":"send_notice","args":{"message":"Ready',
     ].join("\n"),
   },
+  {
+    label: "推理草稿 + 截断调用",
+    modes: { extract: true, ignoreThink: true },
+    input: [
+      "<ThInK>",
+      "Possible call, still a draft:",
+      '{"tool":"draft_guess","args":{"account":7,}}',
+      "</tHiNk>",
+      '{"tool":"get_balance","args":{',
+      '  "account":9007199254740993,',
+      '  "note":"Literal <think>marker</think>"',
+      '}}',
+      "",
+      '{"tool":"send_notice","args":{"message":"Status 🌙',
+    ].join("\n"),
+    schema: {
+      type: "object",
+      required: ["tool", "args"],
+      properties: {
+        tool: { enum: ["get_balance", "send_notice"] },
+        args: {
+          type: "object",
+          properties: { account: { type: "integer" }, message: { type: "string" } },
+        },
+      },
+    },
+  },
 ];
