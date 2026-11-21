@@ -212,6 +212,8 @@ Open `web/index.html` directly from a repository checkout. The offline lab suppo
 node web/build.mjs
 ```
 
+Pages 工作流会从选定提交重新构建引擎，再上传 `web/` 的静态文件。The Pages workflow rebuilds the engine from the selected commit before uploading the static files.
+
 ## 验证 / Verification
 
 ```sh
@@ -224,17 +226,35 @@ moon doc
 node tools/verify-readme.mjs
 ```
 
-Wasm GC、JS、Native 各通过 **348/348** 项测试。2,400 个固定种子样本分别跑默认修复、JSON5 修复和多块提取，成功输出均复核为严格 JSON 并保持幂等。Wasm GC 核心覆盖 **1,433/1,443（99.3%）**。
+Wasm GC、JS、Native 各通过 **349/349** 项测试。2,400 个固定种子样本分别跑默认修复、JSON5 修复和多块提取，成功输出均复核为严格 JSON 并保持幂等。Wasm GC 核心覆盖 **1,474/1,485（99.3%）**。
 
-Each backend passed **348/348** tests. The same 2,400 seeded inputs exercise default repair, JSON5 repair and extraction. Every successful result is checked for strict JSON and idempotence. Wasm GC core coverage is **1,433/1,443 (99.3%)**.
+Each backend passed **349/349** tests. The same 2,400 seeded inputs exercise default repair, JSON5 repair and extraction. Every successful result is checked for strict JSON and idempotence. Wasm GC core coverage is **1,474/1,485 (99.3%)**.
 
 ## 基准 / Benchmarks
 
+### JS 优化前后对照 / JS follow-up
+
+Windows Ryzen 9 8945HX、Node v24.20.0、MoonBit 0.1.20261119。每项为十组 release 测量均值，基线 `8a3469b` 与优化版使用相同样本。流式分片这一行只计写入和读取一次检查点。
+
+Each row compares ten release batches on the same input and toolchain against `8a3469b`. The stream row measures appending shards and reading one checkpoint.
+
+| 场景 / Workload | 基线 / Baseline | 优化后 / Optimized |
+| --- | ---: | ---: |
+| 约 100 KB 截断 ASCII 字符串 / Truncated string | 977.24 µs | 612.20 µs |
+| Emoji 和转义字符 / Emoji and escapes | 1.72 ms | 1.17 ms |
+| 2,000 个流式分片 / Stream shards | 522.53 µs | 97.89 µs |
+| 100 KB 畸形工具调用 / Malformed tool calls | 18.53 ms | 16.00 ms |
+
+```sh
+moon bench --target js --release --no-parallelize -p ZSY2221/json_repair -f repair_bench_test.mbt
+moon bench --target js --release --no-parallelize -p ZSY2221/json_repair -f scaling_bench_test.mbt
+```
+
 ### 四档输入 / Throughput
 
-单元格为平均延迟（µs）与吞吐量（十进制 MB/s）。用重复工具调用和末尾截断构造等比例 ASCII 输入，MoonBit release，每项十组重复。Windows Ryzen 9 8945HX，JS 用 Node v24.20.0，Native 用 Ubuntu 22.04 WSL。
+下方三后端与产物体积表记录 `8a3469b` 的基线。单元格为平均延迟（µs）与吞吐量（十进制 MB/s）。用重复工具调用和末尾截断构造等比例 ASCII 输入，MoonBit release，每项十组重复。Windows Ryzen 9 8945HX，JS 用 Node v24.20.0，Native 用 Ubuntu 22.04 WSL。
 
-Each cell shows mean latency in microseconds and throughput in decimal MB/s. Fixtures contain repeated tool calls and a truncated tail. Ten release batches ran on a Ryzen 9 8945HX using Windows Wasm GC, Node v24.20.0 for JS, and Ubuntu 22.04 WSL for Native.
+The cross-backend and size tables below record the `8a3469b` baseline. Each cell shows mean latency in microseconds and throughput in decimal MB/s. Fixtures contain repeated tool calls and a truncated tail. Ten release batches ran on a Ryzen 9 8945HX using Windows Wasm GC, Node v24.20.0 for JS, and Ubuntu 22.04 WSL for Native.
 
 | 输入 / Input | Wasm GC | JS | Native (WSL) |
 | --- | ---: | ---: | ---: |
