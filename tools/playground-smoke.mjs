@@ -72,6 +72,19 @@ try {
 
   await outputHas("Investigate checkout timeout");
   await wait("#schema-state", "Pass");
+  await wait("#engine-status", "and Wasm GC available");
+  assert.equal(await page.locator("#engine-wasm-option").isDisabled(), false);
+  const wasmAbi = await page.evaluate(async () => {
+    const bytes = Uint8Array.from(atob(window.moonWasmBuild.base64), unit => unit.charCodeAt(0));
+    const module = await WebAssembly.compile(bytes, { builtins: ["js-string"], importedStringConstants: "_" });
+    return { magic: Array.from(bytes.slice(0, 4)), imports: WebAssembly.Module.imports(module),
+      exports: WebAssembly.Module.exports(module).map(({ name }) => name) };
+  });
+  assert.deepEqual(wasmAbi.magic, [0, 97, 115, 109]);
+  assert.deepEqual(wasmAbi.imports, []);
+  for (const entry of ["moonLabRun", "moonLabStreamStart", "moonLabStreamPush", "moonLabStreamView", "moonLabRepairOnly"]) {
+    assert.ok(wasmAbi.exports.includes(entry), "Missing Wasm GC function " + entry);
+  }
   assert.equal(await page.locator("#enable-ignore-think").isChecked(), false);
   const initial = await page.locator("#source").inputValue();
   await page.evaluate(() => {
@@ -92,7 +105,7 @@ try {
   await page.locator("#speed").selectOption("120");
   await page.locator("#stream").click();
   await wait("#stream-count", "Finalized");
-  await wait("#stream-boundary", "Stream sealed");
+  await wait("#stream-boundary", "Input finalized");
   await wait("#stream-stack", "Depth 2");
   await wait("#schema-state", "Pass");
   assert.equal(await page.locator("#source").inputValue(), initial);
@@ -245,21 +258,65 @@ try {
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   assert.equal(clipboard.replace(/\r\n/g, "\n"), await page.locator("#retry-prompt").textContent());
 
+  const jsRuns = await page.evaluate(() => window.engineRunsForBlockSwitch);
+  await page.locator("#engine").selectOption("wasm");
+  await sample("Patch stream");
+  await outputHas("9007199254740993");
+  await wait("#schema-state", "Pass");
+  assert.equal(await page.evaluate(() => window.engineRunsForBlockSwitch), jsRuns, "Wasm selection must avoid the JS backend");
+  await page.getByRole("tab", { name: "Live patches" }).click();
+  await page.evaluate(() => {
+    window.fieldSealHistory = [];
+    const fields = document.getElementById("fields");
+    new MutationObserver(() => {
+      const line = fields.querySelector('[data-pointer="/args/line~0item"]');
+      if (line) window.fieldSealHistory.push(line.dataset.state);
+    }).observe(fields, { childList: true });
+  });
+  await page.locator("#speed").selectOption("60");
+  await page.locator("#stream").click();
+  await wait("#stream-count", "Finalized");
+  await wait("#schema-state", "Pass");
+  assert.equal(await page.locator('#fields [data-pointer="/args/order~1id"]').getAttribute("data-state"), "sealed");
+  assert.equal(await page.locator('#fields [data-pointer="/args/order~1id"] .field-value').textContent(), "9007199254740993");
+  assert.equal(await page.locator('#fields [data-pointer="/args/memo"]').getAttribute("data-state"), "streaming");
+  const fieldStates = await page.evaluate(() => window.fieldSealHistory);
+  assert.ok(fieldStates.includes("streaming") && fieldStates.at(-1) === "sealed", "A completed string must change from streaming to sealed");
+  const patchText = await page.locator("#patches").textContent();
+  assert.match(patchText, /\+ add\/args\/line~0item/);
+  assert.match(patchText, /~ replace\/args\/memo/);
+  assert.match(patchText, /9007199254740993/);
+  assert.doesNotMatch(patchText, /9007199254740992|scratch/);
+
+  const wasmDownloadEvent = page.waitForEvent("download");
+  await page.locator("#download").click();
+  const wasmDownload = await wasmDownloadEvent;
+  const wasmReport = await readFile(await wasmDownload.path(), "utf8");
+  assert.match(wasmReport, /"order\/id":9007199254740993(?=[,}])/);
+  assert.match(wasmReport, /"trace":\{/);
+  assert.doesNotMatch(wasmReport, /9007199254740992|scratch/);
+  await page.getByRole("tab", { name: "Live patches" }).press("ArrowLeft");
+  assert.equal(await page.getByRole("tab", { name: "Repaired JSON" }).getAttribute("aria-selected"), "true");
+  await outputHas("9007199254740993");
+
   await page.locator("#benchmark").click();
   await wait("#bench-state", "10,000 attempts per engine");
   assert.equal(await page.locator("#bench-repair").textContent(), "100%");
+  assert.equal(await page.locator("#bench-wasm").textContent(), "100%");
   assert.equal(await page.locator("#bench-strict").textContent(), "0%");
   assert.match(await page.locator("#bench-repair-detail").textContent(), /\d+\.\d+ µs median · \d+\.\d+ MB\/s/);
+  assert.match(await page.locator("#bench-wasm-detail").textContent(), /\d+\.\d+ µs median · \d+\.\d+ MB\/s/);
+  assert.match(await page.locator("#bench-ratio").textContent(), /\d+\.\d+×/);
+  assert.match(await page.locator("#bench-wasm-size").textContent(), /KiB gzip/);
   assert.equal(await page.locator("#bench-progress").evaluate(bar => bar.value), 10_000);
 
   if (process.argv.includes("--screenshot")) {
-    await sample(reasoningPreset);
-    await outputHas("9007199254740993");
-    await page.locator("#stream").click();
-    await wait("#stream-count", "Finalized");
-    await outputHas("9007199254740993");
-    await wait("#schema-state", "Pass");
     await ignoredThink.click();
+    await page.getByRole("tab", { name: "Live patches" }).click();
+    await page.locator('#patches [data-op="add"]').last().evaluate(row => {
+      const list = row.parentElement;
+      list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    });
     await page.evaluate(() => window.scrollTo(0, 0));
     const benchBounds = await page.locator(".benchmark").boundingBox();
     assert.ok(benchBounds.y + benchBounds.height <= 1080, "Benchmark must remain inside the capture.");
@@ -268,7 +325,7 @@ try {
     assert.equal(png.readUInt32BE(20), 1080);
   }
 
-  const expectedAssets = ["", "style.css", "engine.js", "examples.js", "json-view.js", "app.js"];
+  const expectedAssets = ["", "style.css", "engine.js", "engine-wasm.js", "examples.js", "json-view.js", "app.js"];
   for (const asset of expectedAssets) assert.ok(paths.has(subpath + asset), "Missing " + asset);
   assert.deepEqual(errors, []);
   const narrow = await context.newPage();
@@ -277,6 +334,8 @@ try {
   await narrow.setViewportSize({ width: 390, height: 844 });
   await narrow.goto(site);
   await narrow.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
+  await narrow.getByRole("button", { name: "Patch stream", exact: true }).click();
+  await narrow.getByRole("tab", { name: "Live patches" }).click();
   assert.ok(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
 
   const offline = await browser.newContext({ offline: true });
@@ -285,15 +344,32 @@ try {
   filePage.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   await filePage.goto(pathToFileURL(resolve(root, "index.html")).href);
   await filePage.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
+  await filePage.waitForFunction(() => !document.getElementById("engine-wasm-option").disabled);
+  await filePage.locator("#engine").selectOption("wasm");
+  await filePage.getByRole("button", { name: "Patch stream", exact: true }).click();
+  await filePage.waitForFunction(() => document.getElementById("output").textContent.includes("9007199254740993"));
+  const fallback = await context.newPage();
+  fallback.on("pageerror", error => errors.push(error.message));
+  fallback.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  await fallback.addInitScript(() => { WebAssembly.instantiate = async () => { throw new Error("unsupported test host"); }; });
+  await fallback.goto(site);
+  await fallback.waitForFunction(() => document.getElementById("engine-status").textContent.includes("Wasm GC unavailable"));
+  assert.equal(await fallback.locator("#engine-wasm-option").isDisabled(), true);
+  await fallback.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
   assert.deepEqual(errors, []);
 
-  console.log("Subpath: " + site + " · 6 local assets · 0 HTTP errors and 0 console errors");
+  console.log("Edge/Chromium " + browser.version() + " at " + site + " · 7 local assets · 0 HTTP errors and 0 console errors");
   console.log("Stream replay, pause, step, finalize, stack, and schema state changes verified.");
   console.log("Three extracted calls, JSON5, schema coercion, exact dual highlights, and retry prompt copy verified.");
   console.log("Think mode: mixed-case tags, literal markers, open and streamed blocks, source projection, and exact download verified.");
   console.log("Lossless report retained the exact literal 9007199254740993 and was invalidated on empty input.");
-  console.log("10,000 attempts per engine: " + await page.locator("#bench-repair").textContent() + " recovery vs " + await page.locator("#bench-strict").textContent() + " strict. " + await page.locator("#bench-repair-detail").textContent());
-  console.log("390px viewport and offline file:// loading verified.");
+  console.log("Live RFC 6902 operations, RFC 6901 paths, streaming-to-sealed fields, and Wasm GC exact raw download verified.");
+  console.log("Edge instantiated the Wasm binary with JS string builtins and zero ordinary host imports.");
+  for (const [label, id] of [["MoonBit JS", "repair"], ["MoonBit Wasm GC", "wasm"], ["JSON.parse", "strict"]]) {
+    console.log(label + " · 10,000 attempts · " + await page.locator("#bench-" + id).textContent() + " · " + await page.locator("#bench-" + id + "-detail").textContent());
+  }
+  console.log(await page.locator("#bench-ratio").textContent());
+  console.log("390px viewport, offline file:// Wasm GC, and JS fallback verified.");
 } finally {
   if (browser) await browser.close();
   await new Promise(done => server.close(done));

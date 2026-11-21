@@ -52,3 +52,4 @@
 /cmd/playground/*
 !/cmd/playground/playground.mbt
 !/cmd/playground/moon.pkg
+!/cmd/playground/pkg.generated.mbti

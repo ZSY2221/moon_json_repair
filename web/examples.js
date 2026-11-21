@@ -99,6 +99,24 @@ Thanks for your patience',
 
 const labFixtures = [
   {
+    label: "Patch stream",
+    modes: { ignoreThink: true },
+    input: [
+      "<think>",
+      '{"tool":"scratch","args":{"order/id":17}}',
+      "</think>",
+      '{"tool":"update_order","args":{',
+      '  "order/id":9007199254740993,',
+      '  "line~item":"Gate ready for noon",',
+      '  "memo":"Customer requested a noon pickup',
+    ].join("\n"),
+    schema: toolSchema("update_order", {
+      "order/id": { type: "integer" },
+      "line~item": { type: "string" },
+      memo: { type: "string" },
+    }),
+  },
+  {
     label: "Precision & coercion",
     modes: { json5: true, coerce: true },
     input: [

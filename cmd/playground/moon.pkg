@@ -6,8 +6,14 @@ import {
 
 pkgtype(kind: "foreign_library")
 
-supported_targets = "js"
+supported_targets = "js+wasm-gc"
 
 options(
-  link: { "js": { "format": "iife" } },
+  link: {
+    "js": { "format": "iife" },
+    "wasm-gc": {
+      "use-js-builtin-string": true,
+      "imported-string-constants": "_",
+    },
+  },
 )

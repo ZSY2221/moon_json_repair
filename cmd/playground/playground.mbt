@@ -59,6 +59,7 @@ fn lab_block(
   confidence : Int32,
   schema : LabSchema,
   coerce : Bool,
+  trace : Json?,
 ) -> Json {
   let (output, value, coercions, validation, retry_prompt) = match schema {
     LabSkip => {
@@ -102,7 +103,7 @@ fn lab_block(
       (output, value, edits, validation, retry)
     }
   }
-  {
+  let block : Map[String, Json] = {
     "start": @json.to_json(start),
     "end": @json.to_json(end),
     "confidence": @json.to_json(confidence),
@@ -113,6 +114,10 @@ fn lab_block(
     "validation": validation,
     "retry_prompt": retry_prompt,
   }
+  if trace is Some(trace) {
+    block["trace"] = trace
+  }
+  Json::object(block)
 }
 
 ///|
@@ -139,6 +144,7 @@ fn lab_result(
   coerce : Bool,
   extract : Bool,
   finalize : Bool,
+  session : LabSession?,
 ) -> String {
   let schema = read_lab_schema(schema_text)
   if extract {
@@ -147,7 +153,18 @@ fn lab_result(
     }
     return lab_response(
       @repair.extract_all_with_policy(source, policy).map(blocks => {
-        blocks.map(block => {
+        let active : Map[Int32, LabBlockStream] = Map([])
+        let result = blocks.map(block => {
+          let trace = match session {
+            None => None
+            Some(session) =>
+              session.block_trace(
+                source,
+                block.start.offset,
+                block.end.offset,
+                active,
+              )
+          }
           lab_block(
             block.report,
             block.start,
@@ -155,16 +172,29 @@ fn lab_result(
             block.confidence,
             schema,
             coerce,
+            trace,
           )
         })
+        if session is Some(session) {
+          session.blocks = active
+        }
+        result
       }),
       stream.status(),
     )
   }
-  let report = if finalize && !stream.status().finalized {
-    stream.finalize()
+  let (report, trace) = if session is Some(_) {
+    if finalize && !stream.status().finalized {
+      ignore(stream.finalize())
+    }
+    match stream.next_patches() {
+      Ok(frame) => (Ok(frame.report), Some(lab_trace(frame)))
+      Err(error) => (Err(error), None)
+    }
+  } else if finalize && !stream.status().finalized {
+    (stream.finalize(), None)
   } else {
-    stream.preview()
+    (stream.preview(), None)
   }
   let status = stream.status()
   lab_response(
@@ -177,6 +207,7 @@ fn lab_result(
           100,
           schema,
           coerce,
+          trace,
         ),
       ]
     }),
@@ -205,7 +236,8 @@ pub fn lab_run(
   let stream = @repair.RepairStream::with_policy(policy)
   match stream.push(source) {
     Err(error) => lab_response(Err(error), stream.status())
-    Ok(_) => lab_result(source, schema, policy, stream, coerce, extract, false)
+    Ok(_) =>
+      lab_result(source, schema, policy, stream, coerce, extract, false, None)
   }
 }
 
@@ -213,12 +245,57 @@ pub fn lab_run(
 priv struct LabSession {
   policy : @repair.RepairPolicy
   stream : @repair.RepairStream
+  mut blocks : Map[Int32, LabBlockStream]
+}
+
+///|
+priv struct LabBlockStream {
+  stream : @repair.RepairStream
+  mut end : Int32
+}
+
+///|
+fn lab_trace(frame : @repair.PatchFrame) -> Json {
+  let patches = @json.to_json(frame.patches)
+  {
+    "patches": patches,
+    "patches_json": patches.stringify(),
+    "fields": @json.to_json(frame.fields),
+    "json": frame.report.json,
+  }
+}
+
+///|
+fn LabSession::block_trace(
+  self : LabSession,
+  source : String,
+  start : Int32,
+  end : Int32,
+  active : Map[Int32, LabBlockStream],
+) -> Json? {
+  let block = match self.blocks.get(start) {
+    Some(block) if block.end <= end => block
+    _ => { end: start, stream: @repair.RepairStream::with_policy(self.policy), }
+  }
+  if block.stream.push(source[block.end:end].to_owned()) is Err(_) {
+    return None
+  }
+  block.end = end
+  active[start] = block
+  match block.stream.next_patches() {
+    Ok(frame) => Some(lab_trace(frame))
+    Err(_) => None
+  }
 }
 
 ///|
 let current_lab_session : @ref.Ref[LabSession] = {
   let policy = lab_policy(false, false)
-  @ref.Ref({ policy, stream: @repair.RepairStream::with_policy(policy), })
+  @ref.Ref({
+    policy,
+    stream: @repair.RepairStream::with_policy(policy),
+    blocks: {},
+  })
 }
 
 ///|
@@ -229,6 +306,7 @@ pub fn lab_stream_start(json5 : Bool, ignore_think : Bool) -> Unit {
   current_lab_session.val = {
     policy,
     stream: @repair.RepairStream::with_policy(policy),
+    blocks: {},
   }
 }
 
@@ -249,8 +327,17 @@ pub fn lab_stream_view(
   extract : Bool,
   finalize : Bool,
 ) -> String {
-  let { policy, stream, } = current_lab_session.val
-  lab_result(source, schema, policy, stream, coerce, extract, finalize)
+  let session = current_lab_session.val
+  lab_result(
+    source,
+    schema,
+    session.policy,
+    session.stream,
+    coerce,
+    extract,
+    finalize,
+    Some(session),
+  )
 }
 
 ///|

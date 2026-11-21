@@ -1,0 +1,23 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "ZSY2221/json_repair/cmd/playground"
+
+// Values
+pub fn lab_repair_only(String) -> Bool
+
+pub fn lab_run(String, String, Bool, Bool, Bool, Bool) -> String
+
+pub fn lab_stream_push(String) -> Bool
+
+pub fn lab_stream_start(Bool, Bool) -> Unit
+
+pub fn lab_stream_view(String, String, Bool, Bool, Bool) -> String
+
+pub fn run_payload(String, String) -> String
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

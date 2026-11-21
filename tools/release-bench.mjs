@@ -188,6 +188,34 @@ function measureScaling(moduleName, target) {
   }
 }
 
+function measureReasoning(moduleName, target) {
+  const output = runMoon([
+    "bench", "--target", target, "--release", "--no-parallelize", "--deny-warn",
+    "--package", moduleName, "--file", "think_bench_wbtest.mbt",
+  ], target === "native" && Boolean(distribution), repository);
+  const toMicros = { ns: 0.001, "µs": 1, "μs": 1, us: 1, ms: 1000, s: 1_000_000 };
+  const means = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const row = line.match(/^think-(checkpoint|reference|unclosed(?:-small|-reference)?)-(\d+)\s+([\d.]+)\s+(ns|[µμu]s|ms|s)\s+±/);
+    if (row) means.set(row[1] + "-" + row[2], Number(row[3]) * toMicros[row[4]]);
+  }
+  assert.equal(means.size, 13, "Unexpected reasoning benchmark output:\n" + output);
+  for (const chunk of [16, 64, 256]) {
+    const checkpointUs = means.get("checkpoint-" + chunk);
+    const referenceUs = means.get("reference-" + chunk);
+    const unclosedUs = means.get("unclosed-" + chunk);
+    const unclosedSmallUs = means.get("unclosed-small-" + chunk);
+    const unclosedReferenceUs = means.get("unclosed-reference-" + chunk);
+    console.log(JSON.stringify({
+      target, thinkChunk: chunk, checkpointUs, referenceUs,
+      speedup: Number((referenceUs / checkpointUs).toFixed(2)),
+      unclosedSmallUs, unclosedUs, unclosedReferenceUs,
+      unclosedGrowth: Number((unclosedUs / unclosedSmallUs).toFixed(2)),
+      ...(unclosedReferenceUs && { unclosedSpeedup: Number((unclosedReferenceUs / unclosedUs).toFixed(2)) }),
+    }));
+  }
+}
+
 try {
   const manifest = readFileSync(join(repository, "moon.mod"), "utf8");
   const module = manifest.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
@@ -232,6 +260,7 @@ try {
     const repairSize = fileSizes(compile("repair_probe", target));
     console.log(JSON.stringify({ target, strict: strictSize, repair: repairSize }));
     measureScaling(module, target);
+    measureReasoning(module, target);
   }
 } finally {
   const target = realpathSync(workspace);

@@ -10,6 +10,9 @@ const elements = Object.fromEntries([
   "schema-errors", "schema", "retry-card", "retry-prompt", "copy-retry", "benchmark",
   "bench-progress", "bench-state", "bench-repair", "bench-repair-detail", "bench-strict",
   "bench-strict-detail",
+  "engine", "engine-wasm-option", "engine-status", "output-label", "trace-tab", "result-panel",
+  "trace-panel", "fields", "fields-empty", "patches", "patches-empty", "patch-count",
+  "bench-wasm", "bench-wasm-detail", "bench-wasm-size", "bench-js-size", "bench-ratio",
 ].map((id) => [id, document.getElementById(id)]));
 
 const samples = [...examples, ...labFixtures];
@@ -22,6 +25,50 @@ let copyTimer = null;
 let blockIndex = 0;
 let auditIndex = -1;
 let visualAudit = null;
+let lastTraceBlock = null;
+const traceHistory = new Map();
+
+function bridge(api) {
+  return {
+    run: (...args) => api.moonLabRun(...args),
+    start: (...args) => api.moonLabStreamStart(...args),
+    push: (chunk) => api.moonLabStreamPush(chunk),
+    view: (...args) => api.moonLabStreamView(...args),
+    repairOnly: (input) => api.moonLabRepairOnly(input),
+  };
+}
+
+const jsEngine = bridge(globalThis);
+let wasmEngine = null;
+let activeEngine = jsEngine;
+
+async function loadWasm() {
+  const pack = globalThis.moonWasmBuild;
+  if (pack) {
+    for (const [id, size] of Object.entries(pack.sizes)) {
+      const metric = elements["bench-" + id + "-size"];
+      metric.textContent = `${(size.raw / 1024).toFixed(1)} KiB · ${(size.gzip / 1024).toFixed(1)} KiB gzip`;
+      metric.title = `${size.raw.toLocaleString()} raw bytes · ${size.gzip.toLocaleString()} gzip -9 bytes`;
+    }
+  }
+  try {
+    if (!pack) throw new Error("Missing built engine");
+    const bytes = Uint8Array.from(atob(pack.base64), (unit) => unit.charCodeAt(0));
+    const { instance } = await WebAssembly.instantiate(bytes, {}, {
+      builtins: ["js-string"], importedStringConstants: "_",
+    });
+    const candidate = bridge(instance.exports);
+    if (!candidate.repairOnly("{}")) throw new Error("Wasm repair probe failed");
+    wasmEngine = candidate;
+    elements["engine-wasm-option"].disabled = false;
+    elements["engine-status"].textContent = "MoonBit JS and Wasm GC available";
+  } catch {
+    elements["engine-status"].textContent = "Wasm GC unavailable in this browser. Using MoonBit JS.";
+    elements["bench-wasm-detail"].textContent = "Unavailable in this browser";
+  }
+}
+
+const wasmReady = loadWasm();
 
 function node(tag, className, content) {
   const element = document.createElement(tag);
@@ -181,7 +228,7 @@ function showStreamStatus(status) {
     : "Depth 0 · stack ∅";
   stack.title = stack.textContent;
   const boundary = elements["stream-boundary"];
-  boundary.textContent = status?.finalized ? "Stream sealed"
+  boundary.textContent = status?.finalized ? "Input finalized"
     : status?.stable ? "Stable prefix"
     : status?.stable_offset > 0 ? "Checkpoint @" + status.stable_offset
     : "No checkpoint";
@@ -215,7 +262,64 @@ function selectionRows(result, source, elapsed) {
   elements.blocks.replaceChildren(...buttons);
 }
 
+function collectTrace(block) {
+  if (!block.trace?.patches.length) return;
+  const key = block.start.offset;
+  const ledger = traceHistory.get(key) ?? { total: 0, entries: [] };
+  const wire = jsonView(block.trace.patches_json);
+  for (const [index, operation] of block.trace.patches.entries()) {
+    const span = wire.pointers.get("/" + index + "/value");
+    const raw = span ? wire.text.slice(span.start, Math.min(span.end, span.start + 120)) : "";
+    const value = span && span.end - span.start > raw.length ? raw + "…" : raw;
+    ledger.entries.push({ op: operation.op, path: operation.path, value });
+    ledger.total++;
+  }
+  if (ledger.entries.length > 120) ledger.entries = ledger.entries.slice(-120);
+  traceHistory.set(key, ledger);
+}
+
+function showTrace(block) {
+  lastTraceBlock = block;
+  if (elements["trace-panel"].hidden) return;
+  const trace = block?.trace;
+  const ledger = trace && traceHistory.get(block.start.offset);
+  elements["patch-count"].textContent = ledger ? `${ledger.total} ops` : "";
+  elements["patches-empty"].hidden = Boolean(ledger?.entries.length);
+  const operations = document.createDocumentFragment();
+  for (const { op, path, value } of ledger?.entries ?? []) {
+    const row = node("li", "patch-row", "");
+    const label = { add: "+ add", replace: "~ replace", remove: "− remove" }[op];
+    row.dataset.op = op;
+    row.append(node("span", "patch-op", label), node("code", "patch-path", path || "(root)"));
+    if (value) row.append(node("code", "patch-value", value));
+    operations.append(row);
+  }
+  elements.patches.replaceChildren(operations);
+  elements.patches.scrollTop = elements.patches.scrollHeight;
+  const fields = document.createDocumentFragment();
+  if (trace) {
+    const model = jsonView(trace.json);
+    const argumentPaths = trace.fields.some(({ pointer }) => pointer.startsWith("/args/"));
+    for (const { pointer, sealed } of trace.fields) {
+      const span = model.pointers.get(pointer);
+      if (!span || !pointer || (argumentPaths && !pointer.startsWith("/args/"))) continue;
+      const first = model.text[span.start];
+      if ((first === "[" || first === "{") && span.end - span.start > 2) continue;
+      const raw = model.text.slice(span.start, Math.min(span.end, span.start + 240));
+      const row = node("li", "field-row", "");
+      row.dataset.pointer = pointer;
+      row.dataset.state = sealed ? "sealed" : "streaming";
+      row.append(node("code", "field-name", pointer), node("span", "field-state", row.dataset.state),
+        node("code", "field-value", raw + (raw.length < span.end - span.start ? "…" : "")));
+      fields.append(row);
+    }
+  }
+  elements["fields-empty"].hidden = fields.childElementCount > 0;
+  elements.fields.replaceChildren(fields);
+}
+
 function showBlock(source, block, elapsed) {
+  showTrace(block);
   visualAudit = makeVisualAudit(source, block);
   if (auditIndex >= visualAudit.edits.length) auditIndex = -1;
   showOutput(visualAudit.output, "success", elapsed);
@@ -258,13 +362,14 @@ function render() {
   const options = repairOptions();
   const started = performance.now();
   const raw = playback
-    ? globalThis.moonLabStreamView(source, schema, options[1], options[2], playback.done)
-    : globalThis.moonLabRun(source, schema, ...options);
+    ? activeEngine.view(source, schema, options[1], options[2], playback.done)
+    : activeEngine.run(source, schema, ...options);
   const result = JSON.parse(raw); // Only for display. The original string is retained for download.
   const elapsed = (performance.now() - started).toFixed(2) + " ms";
   showStreamStatus(result.stream);
   visualAudit = null;
   if (!source.trim()) {
+    showTrace(null);
     selectionRows({ blocks: [] });
     showOutput("Repaired JSON will appear here.", "idle");
     showAudit([], "Enter tool-call output to see the edits.");
@@ -273,6 +378,7 @@ function render() {
     return;
   }
   if (!result.ok) {
+    showTrace(null);
     selectionRows({ blocks: [] });
     const error = result.error;
     showOutput(error.message + "\n\n" + error.kind + " · line " + error.position.line + ", column " + error.position.column, "failure", elapsed);
@@ -282,9 +388,11 @@ function render() {
     return;
   }
   blockIndex = Math.min(blockIndex, Math.max(0, result.blocks.length - 1));
+  for (const candidate of result.blocks) collectTrace(candidate);
   selectionRows(result, source, elapsed);
   const block = result.blocks[blockIndex];
   if (!block) {
+    showTrace(null);
     showOutput("No complete or repairable candidate blocks found.", "idle", elapsed);
     showAudit([], "Paste a response containing a JSON object, array, or fenced block.");
     showSchema("idle", "Pending", "Select an extracted candidate to validate.");
@@ -308,6 +416,7 @@ function resetPlayback() {
   cancelAnimationFrame(playbackFrame);
   playbackFrame = 0;
   playback = null;
+  traceHistory.clear();
   elements.stream.dataset.running = "false";
   elements["stream-label"].textContent = "模拟 LLM 实时流式输出";
   elements["source-state"].textContent = "Editable input";
@@ -325,7 +434,8 @@ function pausePlayback(message = "Stream paused") {
 }
 
 function startLabSession() {
-  globalThis.moonLabStreamStart(
+  traceHistory.clear();
+  activeEngine.start(
     elements["enable-json5"].checked,
     elements["enable-ignore-think"].checked,
   );
@@ -351,7 +461,7 @@ function pushTokens(count) {
   if (!current || current.done || current.error) return;
   const next = Math.min(current.next + count, current.tokens.length);
   const chunk = current.tokens.slice(current.next, next).join("");
-  if (!globalThis.moonLabStreamPush(chunk)) {
+  if (!activeEngine.push(chunk)) {
     current.error = true;
     pausePlayback("Stream input limit reached");
     elements["source-state"].textContent = "Stream input limit reached";
@@ -457,11 +567,41 @@ elements.source.addEventListener("input", () => {
   scheduleRender();
 });
 elements.schema.addEventListener("input", () => { auditIndex = -1; scheduleRender(); });
+elements.engine.addEventListener("change", () => {
+  activeEngine = elements.engine.value === "wasm" && wasmEngine ? wasmEngine : jsEngine;
+  if (playback) {
+    startLabSession();
+    activeEngine.push(elements.source.value);
+  }
+  scheduleRender();
+});
+
+function selectOutputTab(trace) {
+  for (const [id, active] of [["output-label", !trace], ["trace-tab", trace]]) {
+    elements[id].setAttribute("aria-selected", String(active));
+    elements[id].tabIndex = active ? 0 : -1;
+  }
+  elements["result-panel"].hidden = trace;
+  elements["trace-panel"].hidden = !trace;
+  if (trace) showTrace(lastTraceBlock);
+}
+
+for (const [id, trace] of [["output-label", false], ["trace-tab", true]]) {
+  const tab = elements[id];
+  tab.addEventListener("click", () => selectOutputTab(trace));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "End" || (event.key !== "Home" && !trace);
+    selectOutputTab(next);
+    elements[next ? "trace-tab" : "output-label"].focus();
+  });
+}
 for (const id of ["enable-json5", "enable-coercion", "enable-extraction", "enable-ignore-think"]) {
   elements[id].addEventListener("change", () => {
-    if (playback && (id === "enable-json5" || id === "enable-ignore-think")) {
+    if (playback && id !== "enable-coercion") {
       startLabSession();
-      globalThis.moonLabStreamPush(elements.source.value);
+      activeEngine.push(elements.source.value);
     }
     auditIndex = -1;
     blockIndex = 0;
@@ -529,30 +669,33 @@ function showBenchmarkBatch(lane, count, inputBytes) {
   const values = lane.results.slice().sort((left, right) => left - right);
   const middle = Math.floor(values.length / 2);
   const median = values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+  lane.median = median;
   const throughput = lane.ms > 0 ? (count * inputBytes / (lane.ms * 1000)).toFixed(2) + " MB/s" : "MB/s pending";
   elements[lane.id].textContent = (lane.success / count * 100).toFixed(0) + "%";
   elements[lane.id + "-detail"].textContent = median.toFixed(2) + " µs median · " + throughput;
 }
 
 elements.benchmark.addEventListener("click", async () => {
+  elements.benchmark.disabled = true;
+  elements["bench-state"].textContent = "Running on this device…";
+  await wasmReady;
   const input = examples[0].input;
   const inputBytes = new TextEncoder().encode(input).length;
   const strict = (text) => {
     try { JSON.parse(text); return true; } catch { return false; }
   };
-  const lanes = [
-    { run: globalThis.moonLabRepairOnly, id: "bench-repair", results: [], success: 0, ms: 0 },
-    { run: strict, id: "bench-strict", results: [], success: 0, ms: 0 },
-  ];
+  const engines = [[jsEngine.repairOnly, "bench-repair"], [strict, "bench-strict"]];
+  if (wasmEngine) engines.splice(1, 0, [wasmEngine.repairOnly, "bench-wasm"]);
+  const lanes = engines.map(([run, id]) => ({ run, id, results: [], success: 0, ms: 0, median: 0 }));
   const total = 10_000;
   const batch = 250;
-  elements.benchmark.disabled = true;
-  elements["bench-state"].textContent = "Running on this device…";
   elements["bench-progress"].value = 0;
   try {
     for (const lane of lanes) benchBatch(lane.run, input, batch);
     for (let count = batch; count <= total; count += batch) {
-      for (const lane of lanes) {
+      const offset = (count / batch) % lanes.length;
+      for (let index = 0; index < lanes.length; index++) {
+        const lane = lanes[(index + offset) % lanes.length];
         const result = benchBatch(lane.run, input, batch);
         lane.results.push(result.ms * 1000 / batch);
         lane.ms += result.ms;
@@ -561,6 +704,12 @@ elements.benchmark.addEventListener("click", async () => {
       }
       elements["bench-progress"].value = count;
       await nextFrame();
+    }
+    if (wasmEngine && lanes[0].median > 0 && lanes[1].median > 0) {
+      const ratio = lanes[0].median / lanes[1].median;
+      elements["bench-ratio"].textContent = ratio >= 1
+        ? `${ratio.toFixed(2)}× Wasm GC / JS speed`
+        : `${(1 / ratio).toFixed(2)}× JS / Wasm GC speed`;
     }
     elements["bench-state"].textContent = "10,000 attempts per engine";
   } catch (error) {

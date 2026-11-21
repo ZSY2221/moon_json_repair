@@ -6,6 +6,7 @@ function jsonView(text) {
   const tokens = Array.from(text.matchAll(/"(?:\\[\s\S]|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],:]/g),
     ({ 0: token, index }) => ({ text: token, start: index, end: index + token.length }));
   const values = new Map();
+  const pointers = new Map();
   const identities = new Map();
   let index = 0;
   function take(path, role, style = "") {
@@ -16,7 +17,7 @@ function jsonView(text) {
     identities.set(token.identity, token);
     return token;
   }
-  function visit(path, parent) {
+  function visit(path, parent, pointer) {
     const start = tokens[index].start;
     const symbol = tokens[index].text;
     if (symbol === "{") {
@@ -26,7 +27,7 @@ function jsonView(text) {
         const key = path + (/^[A-Za-z_][A-Za-z_0-9]*$/.test(name) ? "." + name : "[" + JSON.stringify(name) + "]");
         take(key, "key", "key");
         take(key, "colon");
-        visit(key, path);
+        visit(key, path, pointer + "/" + name.replaceAll("~", "~0").replaceAll("/", "~1"));
         if (tokens[index].text === ",") take(key, "comma");
       }
       take(path, "close");
@@ -34,18 +35,20 @@ function jsonView(text) {
       take(path, "open");
       let item = 0;
       while (tokens[index].text !== "]") {
-        const key = path + "[" + item++ + "]";
-        visit(key, path);
+        const key = path + "[" + item + "]";
+        visit(key, path, pointer + "/" + item++);
         if (tokens[index].text === ",") take(key, "comma");
       }
       take(path, "close");
     } else {
       take(path, "value", symbol.startsWith('"') ? "string" : /^[tfn]/.test(symbol) ? "literal" : "number");
     }
-    values.set(path, { start, end: tokens[index - 1].end, parent });
+    const range = { start, end: tokens[index - 1].end, parent };
+    values.set(path, range);
+    pointers.set(pointer, range);
   }
-  if (tokens.length > 0) visit("$", null);
-  return { text, tokens, values, identities };
+  if (tokens.length > 0) visit("$", null, "");
+  return { text, tokens, values, identities, pointers };
 }
 
 function highlightText(text, offset, selection, caret) {

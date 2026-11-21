@@ -8,6 +8,7 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./style.css">
   <script defer src="./engine.js"></script>
+  <script defer src="./engine-wasm.js"></script>
   <script defer src="./examples.js"></script>
   <script defer src="./json-view.js"></script>
   <script defer src="./app.js"></script>
@@ -17,7 +18,12 @@
   <header class="site-header">
     <div class="shell header-inner">
       <a class="wordmark" href="./index.html" aria-label="Moon JSON Repair lab home"><span class="logo" aria-hidden="true">{ }</span> moon<span>_</span>json<span>_</span>repair</a>
-      <span class="local"><span aria-hidden="true"></span> MoonBit JS engine · Runs locally</span>
+      <div class="engine-picker">
+        <span class="local"><span aria-hidden="true"></span> Local engine</span>
+        <label class="sr-only" for="engine">Repair engine</label>
+        <select id="engine"><option value="js">MoonBit JS</option><option id="engine-wasm-option" value="wasm" disabled>Wasm GC</option></select>
+        <span class="sr-only" id="engine-status" role="status">Checking Wasm GC support</span>
+      </div>
     </div>
   </header>
 
@@ -80,15 +86,30 @@
 
         <div class="editor-card output-card">
           <div class="panel-heading">
-            <div class="panel-title"><span class="heading-icon" aria-hidden="true">{ }</span><h2 id="output-label">Repaired JSON</h2></div>
+            <div class="output-tabs" role="tablist" aria-label="Repair output">
+              <button id="output-label" type="button" role="tab" aria-controls="result-panel" aria-selected="true">Repaired JSON</button>
+              <button id="trace-tab" type="button" role="tab" aria-controls="trace-panel" aria-selected="false" tabindex="-1">Live patches</button>
+            </div>
             <div class="editor-actions">
               <button class="text-button" id="copy" type="button" disabled><span class="copy-icon" aria-hidden="true"></span><span id="copy-label">Copy JSON</span></button>
               <button class="text-button export-button" id="download" type="button" disabled>Download Lossless Report <span>(.json)</span></button>
             </div>
           </div>
-          <div class="editor-body output-body" id="result-panel">
+          <div class="editor-body output-body" id="result-panel" role="tabpanel" aria-labelledby="output-label">
             <div class="gutter" id="result-gutter" aria-hidden="true"></div>
             <pre id="output-wrap" aria-labelledby="output-label" tabindex="0"><code id="output"></code></pre>
+          </div>
+          <div id="trace-panel" class="trace-panel" role="tabpanel" aria-labelledby="trace-tab" tabindex="0" hidden>
+            <section class="trace-fields" aria-labelledby="fields-label">
+              <h3 id="fields-label">Tool arguments</h3>
+              <p class="trace-empty" id="fields-empty">Play a stream to inspect open and sealed fields.</p>
+              <ul class="field-list" id="fields"></ul>
+            </section>
+            <section class="trace-operations" aria-labelledby="patches-label">
+              <div class="trace-heading"><h3 id="patches-label">RFC 6902 operations</h3><span id="patch-count"></span></div>
+              <p class="trace-empty" id="patches-empty">Patches will appear as the repaired value changes.</p>
+              <ol class="patch-list" id="patches"></ol>
+            </section>
           </div>
           <div class="editor-foot"><span id="repair-state" role="status"></span><span id="elapsed"></span></div>
         </div>
@@ -129,9 +150,10 @@
       </section>
 
       <section class="benchmark" aria-labelledby="benchmark-label">
-        <div class="benchmark-info"><h2 id="benchmark-label">In-browser benchmark</h2><p>10,000 attempts per engine · truncated tool call</p></div>
+        <div class="benchmark-info"><h2 id="benchmark-label">In-browser benchmark</h2><p>10,000 attempts per engine · truncated tool call</p><p id="bench-ratio"></p></div>
         <div class="bench-metrics">
-          <div class="bench-result"><span>MoonBit repair</span><strong id="bench-repair">—</strong><small id="bench-repair-detail">Recovery · latency · throughput</small></div>
+          <div class="bench-result"><span>MoonBit JS</span><strong id="bench-repair">—</strong><small id="bench-repair-detail">Recovery · latency · throughput</small><small id="bench-js-size"></small></div>
+          <div class="bench-result"><span>MoonBit Wasm GC</span><strong id="bench-wasm">—</strong><small id="bench-wasm-detail">Recovery · latency · throughput</small><small id="bench-wasm-size"></small></div>
           <div class="bench-result"><span>JSON.parse</span><strong id="bench-strict">—</strong><small id="bench-strict-detail">Baseline on the same input</small></div>
         </div>
         <div class="bench-action"><button class="stream-button" id="benchmark" type="button">⚡ Run 10,000 attempts</button><progress id="bench-progress" aria-label="Benchmark progress" max="10000" value="0"></progress><span id="bench-state" role="status">Measured on this device</span></div>

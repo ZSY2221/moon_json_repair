@@ -28,7 +28,7 @@ jobs:
         run: node web/build.mjs
       - name: Verify playground assets
         run: |
-          for asset in index.html style.css engine.js examples.js json-view.js app.js; do
+          for asset in index.html style.css engine.js engine-wasm.js examples.js json-view.js app.js; do
             test -s "web/$asset"
           done
       - name: Package static playground
