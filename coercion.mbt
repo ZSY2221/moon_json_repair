@@ -1,5 +1,7 @@
 ///|
-/// Explicit type repairs. Scalar wrapping is independently opt-in.
+/// The schema-directed type conversions a caller permits. Numeric strings
+/// must already be valid JSON numbers. Boolean strings must be exactly
+/// true or false. Array wrapping is independently opt-in.
 #derive(Eq, Debug)
 pub(all) struct CoercionOptions {
   number_strings : Bool
@@ -8,6 +10,8 @@ pub(all) struct CoercionOptions {
 }
 
 ///|
+/// Allow numeric and boolean strings to satisfy an explicit schema type.
+/// Leave scalar-to-array wrapping disabled.
 pub fn CoercionOptions::default() -> CoercionOptions {
   { number_strings: true, boolean_strings: true, wrap_scalar_arrays: false, }
 }
@@ -24,6 +28,8 @@ pub struct CoercionEdit {
 }
 
 ///|
+/// Serialize the path and conversion code alongside the before and after
+/// values. The values keep their JSON types.
 pub impl ToJson for CoercionEdit with fn to_json(self) {
   {
     "path": self.path,
@@ -34,6 +40,8 @@ pub impl ToJson for CoercionEdit with fn to_json(self) {
 }
 
 ///|
+/// The coerced value, its compact JSON text, the ordered type changes, and
+/// the remaining validation errors. Inspect errors before executing a tool.
 #derive(Eq, Debug)
 pub struct CoercionReport {
   json : String
@@ -43,6 +51,8 @@ pub struct CoercionReport {
 }
 
 ///|
+/// Serialize the complete coercion result, including edits and constraints
+/// that still fail.
 pub impl ToJson for CoercionReport with fn to_json(self) {
   {
     "json": self.json,

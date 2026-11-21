@@ -1,10 +1,12 @@
 ///|
+/// Dispatched SSE event type and newline-joined data fields.
 pub struct SseFrame {
   event_type : String
   data : String
 }
 
 ///|
+/// Decoded SSE event or framing error with its physical input line.
 pub struct SseInput {
   line : Int64
   frame : Result[SseFrame, Json]
@@ -29,6 +31,7 @@ pub struct SseDecoder {
 }
 
 ///|
+/// Create an incremental SSE decoder with a bounded text budget.
 pub fn SseDecoder::new(max_chars~ : Int32) -> SseDecoder {
   let max_chars = max_chars.clamp(
     min=1,
@@ -151,6 +154,7 @@ fn SseDecoder::end_line(self : SseDecoder) -> SseInput? {
 }
 
 ///|
+/// Consume bytes until the next physical SSE line or end of the chunk.
 pub fn SseDecoder::next(
   self : SseDecoder,
   chunk : BytesView,
@@ -206,6 +210,7 @@ pub fn SseDecoder::finish(self : SseDecoder) -> SseInput? {
 }
 
 ///|
+/// Return the one-based physical line number for the next input.
 pub fn SseDecoder::line(self : SseDecoder) -> Int64 {
   self.line
 }

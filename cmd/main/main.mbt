@@ -7,13 +7,18 @@ let usage : String =
   #|  --ndjson         Process each physical line and continue after line errors.
   #|  --sse            Parse provider SSE tool-call arguments, emitting JSON lines.
   #|  --emit-patches   Emit RFC 6902 progress and pointer state with --sse.
+  #|  --mcp-guard      Filter one MCP JSON-RPC frame per physical line.
+  #|  --tool-schemas FILE  Read the tool-to-schema JSON registry for --mcp-guard.
   #|  --extract-all    Return all repairable JSON blocks.
   #|  --ignore-think   Skip reasoning blocks before repairing JSON.
+  #|  --json5          Allow the supported JSON5-style repair syntax.
   #|  --coerce         Coerce schema-typed numeric and Boolean strings.
   #|  --retry-prompt   Include a repair prompt for schema errors.
-  #|  --strict-exit    Return 1 for stream errors or 3 for final schema errors.
+  #|  --strict-exit    Return 1 for input errors or 3 for schema/parameter errors.
   #|
-  #|--coerce and --retry-prompt require --schema.
+  #|--coerce requires --schema or --mcp-guard. --retry-prompt requires --schema.
+  #|MCP guard output contains forwarded frames and local JSON-RPC errors.
+  #|Route these separately when integrating with a bidirectional MCP server.
 
 ///|
 async fn read_bounded(
@@ -77,7 +82,15 @@ async fn write_batch_line(
   record : @cli.BatchLine,
   schema : Json?,
   options : @cli.Options,
+  registry : @repair.ToolSchemaRegistry?,
 ) -> Int32 {
+  if registry is Some(registry) {
+    let (frame, status) = @cli.process_mcp_line(record, registry, options)
+    if frame is Some(frame) {
+      @stdio.stdout.text.write("\{frame}\n")
+    }
+    return status
+  }
   let outcome = @cli.process_line(record, schema, options)
   @stdio.stdout.text.write("\{outcome.for_line(record.line).stringify()}\n")
   outcome.status
@@ -89,6 +102,7 @@ async fn run_batch(
   schema : Json?,
   options : @cli.Options,
   max_chars : Int32,
+  registry : @repair.ToolSchemaRegistry?,
 ) -> Int32 {
   let lines = @cli.BatchLines::new(max_chars~)
   let mut status = 0
@@ -100,7 +114,7 @@ async fn run_batch(
       if record is Some(record) {
         status = @cli.merge_status(
           status,
-          write_batch_line(record, schema, options),
+          write_batch_line(record, schema, options, registry),
         )
       }
     }
@@ -108,7 +122,7 @@ async fn run_batch(
   if lines.finish() is Some(record) {
     status = @cli.merge_status(
       status,
-      write_batch_line(record, schema, options),
+      write_batch_line(record, schema, options, registry),
     )
   }
   @cli.batch_exit_status(options, status)
@@ -156,28 +170,38 @@ async fn run_pipe(
   schema : Json?,
   options : @cli.Options,
   max_chars : Int32,
+  registry : @repair.ToolSchemaRegistry?,
 ) -> Int32 {
   if options.sse {
     run_sse(reader, schema, options, max_chars)
   } else {
-    run_batch(reader, schema, options, max_chars)
+    run_batch(reader, schema, options, max_chars, registry)
   }
 }
 
 ///|
 async fn run(options : @cli.Options) -> Int32 {
   let max_chars = @repair.RepairLimits::default().max_input
-  if options.ndjson || options.sse {
+  if options.ndjson || options.sse || options.mcp_guard {
     let schema = read_schema(options.schema, max_chars)
+    let registry = match options.tool_schemas {
+      None => None
+      Some(path) =>
+        Some(
+          @cli.parse_tool_schemas(
+            read_path(Some(path), "tool schemas", max_chars, false),
+          ),
+        )
+    }
     match options.input {
-      None => run_pipe(@stdio.stdin, schema, options, max_chars)
+      None => run_pipe(@stdio.stdin, schema, options, max_chars, registry)
       Some(path) => {
         let file = @fs.open(path[:], mode=ReadOnly) catch {
           error =>
             @cli.fail_cli("io", "could not read input: \{error.to_string()}")
         }
         defer file.close()
-        run_pipe(file, schema, options, max_chars)
+        run_pipe(file, schema, options, max_chars, registry)
       }
     }
   } else {

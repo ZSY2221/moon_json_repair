@@ -15,14 +15,15 @@ pub(all) struct StreamStatus {
 }
 
 ///|
-/// One append-only buffer and a lexical framing checkpoint. Preview and
-/// finalize run the authoritative syntax repair. Reasoning isolation consumes
-/// new code units as they arrive, including tags which span several chunks.
+/// Append-only repair session with lexical and syntax checkpoints. Strict JSON
+/// continuations reuse committed tokens. Ambiguous syntax uses the batch parser.
 pub struct RepairStream {
   priv buffer : StringBuilder
   priv options : RepairOptions
   priv ignore_think_blocks : Bool
+  priv incremental : Bool
   priv mut thought_checkpoint : ThinkCheckpoint?
+  priv mut repair_checkpoint : RepairCheckpoint?
   priv mut scan : FrameScanner
   priv mut size : Int32
   priv mut line : Int32
@@ -32,9 +33,11 @@ pub struct RepairStream {
   priv mut trailing : Bool
   priv mut finalized : Bool
   priv mut previous_patch : Json
+  priv mut previous_hint : CheckpointPatchHint?
 }
 
 ///|
+/// Create a stream with standard JSON syntax and optional resource limits.
 pub fn RepairStream::new(
   limits~ : RepairLimits = RepairLimits::default(),
 ) -> RepairStream {
@@ -43,20 +46,45 @@ pub fn RepairStream::new(
 }
 
 ///|
+/// Create a stream with the requested JSON extensions and resource limits.
 pub fn RepairStream::with_options(options : RepairOptions) -> RepairStream {
   RepairStream::with_policy(options.with_ignore_think_blocks(false))
 }
 
 ///|
+/// Create a stream with the requested syntax and reasoning isolation policy.
 pub fn RepairStream::with_policy(policy : RepairPolicy) -> RepairStream {
+  RepairStream::make(policy, true)
+}
+
+///|
+/// Create a reference stream that reparses each source prefix. Use it to
+/// compare checkpoint results or measure the cost of full-prefix repair.
+pub fn RepairStream::with_uncached_policy(
+  policy : RepairPolicy,
+) -> RepairStream {
+  RepairStream::make(policy, false)
+}
+
+///|
+fn RepairStream::make(
+  policy : RepairPolicy,
+  incremental : Bool,
+) -> RepairStream {
   let options = policy.options
   let limits = options.limits.normalized()
   {
     buffer: StringBuilder(),
     options: { ..options, limits, },
     ignore_think_blocks: policy.ignore_think_blocks,
+    incremental,
     thought_checkpoint: if policy.ignore_think_blocks {
       Some(ThinkCheckpoint::new(limits.max_depth, options.json5))
+    } else {
+      None
+    },
+    repair_checkpoint: if incremental {
+      Some(RepairCheckpoint::new(limits))
     } else {
       None
     },
@@ -69,6 +97,7 @@ pub fn RepairStream::with_policy(policy : RepairPolicy) -> RepairStream {
     trailing: false,
     finalized: false,
     previous_patch: Json::null(),
+    previous_hint: None,
   }
 }
 
@@ -147,6 +176,9 @@ pub fn RepairStream::push(
   }
   self.buffer.write_string(chunk)
   let view = chunk[:]
+  if self.repair_checkpoint is Some(checkpoint) && !checkpoint.feed(view) {
+    self.repair_checkpoint = None
+  }
   if self.thought_checkpoint is Some(checkpoint) {
     for index in 0..<view.length() {
       let unit = char_at(view, index)
@@ -215,9 +247,16 @@ pub fn RepairStream::scanned_units(self : RepairStream) -> Int32 {
 }
 
 ///|
+/// Materialize the repaired document and audit for the accepted prefix.
+/// Committed syntax can be reused, while emitting full output still costs
+/// space proportional to the report.
 pub fn RepairStream::preview(
   self : RepairStream,
 ) -> Result[RepairReport, RepairError] {
+  if self.repair_checkpoint is Some(checkpoint) &&
+    checkpoint.snapshot(false) is Some(snapshot) {
+    return Ok(snapshot.report)
+  }
   let input = self.buffer.to_string()
   if self.ignore_think_blocks {
     repair_with_policy(input, self.options.with_ignore_think_blocks(true))
@@ -233,11 +272,24 @@ pub fn RepairStream::preview(
 pub fn RepairStream::next_patches(
   self : RepairStream,
 ) -> Result[PatchFrame, RepairError] {
+  if self.repair_checkpoint is Some(checkpoint) &&
+    checkpoint.snapshot(true) is Some(snapshot) {
+    let patches = checkpoint_patches(
+      self.previous_patch,
+      self.previous_hint,
+      snapshot,
+      checkpoint,
+    )
+    self.previous_patch = clone_patch_value(snapshot.report.value)
+    self.previous_hint = snapshot.hint
+    return Ok({ patches, fields: snapshot.fields, report: snapshot.report, })
+  }
   let trace = { path: "", fields: [], }
   let policy = self.options.with_ignore_think_blocks(self.ignore_think_blocks)
   repair_policy_traced(self.buffer.to_string(), policy, Some(trace)).map(report => {
     let patches = diff_json_patches(self.previous_patch, report.value)
     self.previous_patch = clone_patch_value(report.value)
+    self.previous_hint = None
     { patches, fields: trace.fields, report, }
   })
 }
@@ -253,6 +305,7 @@ pub fn RepairStream::finalize(
 }
 
 ///|
+/// Discard accepted input, current framing and previous patch history.
 pub fn RepairStream::reset(self : RepairStream) -> Unit {
   self.buffer.reset(keep_capacity=false)
   self.scan = FrameScanner::new(self.options.limits.max_depth)
@@ -260,6 +313,9 @@ pub fn RepairStream::reset(self : RepairStream) -> Unit {
     self.thought_checkpoint = Some(
       ThinkCheckpoint::new(self.options.limits.max_depth, self.options.json5),
     )
+  }
+  if self.incremental {
+    self.repair_checkpoint = Some(RepairCheckpoint::new(self.options.limits))
   }
   self.size = 0
   self.line = 1
@@ -269,4 +325,5 @@ pub fn RepairStream::reset(self : RepairStream) -> Unit {
   self.trailing = false
   self.finalized = false
   self.previous_patch = Json::null()
+  self.previous_hint = None
 }

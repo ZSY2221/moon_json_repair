@@ -1,6 +1,6 @@
 name = "ZSY2221/json_repair"
 
-version = "0.3.0"
+version = "0.4.0"
 
 readme = "README.md"
 
@@ -14,4 +14,4 @@ preferred_target = "wasm-gc"
 
 supported_targets = "+wasm-gc+js+native"
 
-description = "Repair LLM tool arguments with source audits, incremental reasoning isolation, JSON Patch frames, and an SSE gateway."
+description = "Repair streamed tool arguments with exact source audits, incremental JSON Patch, an SSE gateway, and MCP tool-call validation."

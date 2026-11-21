@@ -9,6 +9,8 @@ pub(all) struct JsonPatch {
 }
 
 ///|
+/// Serialize the RFC 6902 operation. The value member is present only when
+/// the operation carries a value.
 pub impl ToJson for JsonPatch with fn to_json(self) {
   let object : Map[String, Json] = { "op": self.op, "path": self.path }
   if self.value is Some(value) {
@@ -27,6 +29,7 @@ pub(all) struct FieldSeal {
 }
 
 ///|
+/// Serialize the RFC 6901 pointer and its source-closure flag as sealed.
 pub impl ToJson for FieldSeal with fn to_json(self) {
   { "pointer": self.pointer, "sealed": self.is_sealed }
 }
@@ -285,6 +288,19 @@ fn patch_diff(
 /// common array edges intact. Short changed array runs use edit-distance
 /// alignment. Large runs use bounded-memory positional edits. Numbers compare
 /// their lossless decimal spelling.
+///
+/// ```mbt check
+/// test {
+///   let previous : Json = { "queue": [1] }
+///   let current : Json = { "queue": [1, 2] }
+///   let patches = @json_repair.diff_json_patches(previous, current)
+///   assert_eq(patches[0].path, "/queue/1")
+///   assert_eq(
+///     @json_repair.apply_json_patches(previous, patches[:]).unwrap(),
+///     current,
+///   )
+/// }
+/// ```
 pub fn diff_json_patches(previous : Json, next : Json) -> Array[JsonPatch] {
   let patches = []
   patch_diff(previous, next, "", 0, patches)

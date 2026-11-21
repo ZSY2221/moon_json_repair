@@ -29,6 +29,7 @@ let sse_max_argument_units : Int32 = 8 * 1_048_576
 let sse_max_metadata_units : Int32 = 4_096
 
 ///|
+/// Translate provider SSE events into independent tool-call streams and reports.
 pub struct SseGateway {
   priv options : Options
   priv schema : Json?
@@ -43,13 +44,12 @@ pub struct SseGateway {
 }
 
 ///|
+/// Start an SSE session with optional schema validation for each call.
 pub fn SseGateway::new(options : Options, schema : Json?) -> SseGateway {
   {
     options,
     schema,
-    policy: @repair.RepairOptions::default().with_ignore_think_blocks(
-      options.ignore_think,
-    ),
+    policy: cli_policy(options),
     calls: {},
     order: [],
     openai_id: "",
@@ -61,11 +61,13 @@ pub fn SseGateway::new(options : Options, schema : Json?) -> SseGateway {
 }
 
 ///|
+/// Test whether the provider sent its terminal sentinel.
 pub fn SseGateway::is_done(self : SseGateway) -> Bool {
   self.done
 }
 
 ///|
+/// Return the accumulated strict exit status for the session.
 pub fn SseGateway::exit_status(self : SseGateway) -> Int32 {
   batch_exit_status(self.options, self.status)
 }
@@ -660,6 +662,7 @@ fn SseGateway::event(
 }
 
 ///|
+/// Apply an SSE event or framing error and return newly available reports.
 pub fn SseGateway::consume(self : SseGateway, input : SseInput) -> Array[Json] {
   let outputs = []
   if !self.done {
@@ -687,6 +690,7 @@ fn SseGateway::finish_into(
 }
 
 ///|
+/// Close any remaining calls and return their final reports.
 pub fn SseGateway::finish(self : SseGateway, line : Int64) -> Array[Json] {
   let outputs = []
   self.finish_into(outputs, line, "eof")

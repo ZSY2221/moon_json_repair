@@ -17,11 +17,15 @@ pub fn parse_args(ArrayView[String]) -> Options raise CliFailure
 
 pub fn parse_schema(String) -> @json.Json raise CliFailure
 
+pub fn parse_tool_schemas(String) -> @json_repair.ToolSchemaRegistry raise CliFailure
+
 pub fn prepare_input(String, Options) -> Result[PreparedInput, @json.Json]
 
 pub fn present(PreparedInput, @json.Json?, Options) -> Outcome
 
 pub fn process_line(BatchLine, @json.Json?, Options) -> Outcome
+
+pub fn process_mcp_line(BatchLine, @json_repair.ToolSchemaRegistry, Options) -> (String?, Int32)
 
 // Errors
 pub(all) suberror CliFailure {
@@ -46,9 +50,12 @@ pub struct Options {
   schema : String?
   ndjson : Bool
   sse : Bool
+  mcp_guard : Bool
+  tool_schemas : String?
   emit_patches : Bool
   extract_all : Bool
   ignore_think : Bool
+  json5 : Bool
   coerce : Bool
   retry_prompt : Bool
   strict_exit : Bool

@@ -14,6 +14,8 @@ pub(all) struct SourcePosition {
 }
 
 ///|
+/// Classification of an edit applied to the source. Use
+/// `RepairEdit::code` for the most specific serialized code.
 #derive(Eq, Debug)
 pub(all) enum RepairKind {
   StripProse
@@ -35,6 +37,7 @@ pub(all) enum RepairKind {
 }
 
 ///|
+/// Return the stable snake-case code for this edit category.
 pub fn RepairKind::code(self : RepairKind) -> String {
   match self {
     StripProse => "strip_prose"
@@ -83,6 +86,8 @@ pub fn RepairEdit::code(self : RepairEdit) -> String {
 }
 
 ///|
+/// Serialize the operation and its original UTF-16 span. Use an empty
+/// replacement to represent removal.
 pub impl ToJson for RepairEdit with fn to_json(self) {
   {
     "kind": self.code(),
@@ -94,6 +99,9 @@ pub impl ToJson for RepairEdit with fn to_json(self) {
 }
 
 ///|
+/// A successful repair with compact JSON text, its parsed value, and edits.
+/// Use `json` as the wire representation when an ordinary host
+/// JSON parser would lose large integers or decimal spellings.
 #derive(Eq, Debug)
 pub(all) struct RepairReport {
   json : String
@@ -102,11 +110,15 @@ pub(all) struct RepairReport {
 }
 
 ///|
+/// Serialize both the exact JSON text and its parsed value, along with the
+/// ordered source audit.
 pub impl ToJson for RepairReport with fn to_json(self) {
   { "json": self.json, "value": self.value, "edits": @json.to_json(self.edits) }
 }
 
 ///|
+/// Why one document was rejected. A limit error indicates the corresponding
+/// input, nesting, or edit budget was exhausted.
 #derive(Eq, Debug)
 pub(all) enum RepairFailureKind {
   EmptyInput
@@ -121,6 +133,7 @@ pub(all) enum RepairFailureKind {
 }
 
 ///|
+/// Return the stable snake-case code for programmatic failure handling.
 pub fn RepairFailureKind::code(self : RepairFailureKind) -> String {
   match self {
     EmptyInput => "empty_input"
@@ -136,6 +149,8 @@ pub fn RepairFailureKind::code(self : RepairFailureKind) -> String {
 }
 
 ///|
+/// A rejected repair with a machine-readable category, a human-readable
+/// message, and the original source position associated with the failure.
 #derive(Eq, Debug)
 pub(all) struct RepairError {
   kind : RepairFailureKind
@@ -144,6 +159,8 @@ pub(all) struct RepairError {
 }
 
 ///|
+/// Serialize the failure using its stable category code and original
+/// UTF-16 position.
 pub impl ToJson for RepairError with fn to_json(self) {
   {
     "kind": self.kind.code(),
@@ -163,14 +180,15 @@ pub(all) struct RepairLimits {
 }
 
 ///|
+/// Allow 1,048,576 UTF-16 units, 128 container levels, and 16,384 edits.
 pub fn RepairLimits::default() -> RepairLimits {
   { max_input: 1_048_576, max_depth: 128, max_edits: 16_384, }
 }
 
 ///|
-/// Extra repair behavior is explicitly enabled. Extraction considers at most
-/// max_blocks successful candidates, clamped to the inclusive range 0–4096.
-/// Start with RepairOptions::default and update only the options you need.
+/// Single-document repair and extraction options. Set json5 to accept exact
+/// hexadecimal integers and extended decimal spellings. max_blocks limits
+/// successful extraction results and is clamped to 0–4,096.
 #derive(Eq, Debug)
 pub(all) struct RepairOptions {
   limits : RepairLimits
@@ -179,14 +197,15 @@ pub(all) struct RepairOptions {
 }
 
 ///|
+/// Use the default repair limits, disable JSON5 numbers, and allow extraction
+/// to return up to 128 independent documents.
 pub fn RepairOptions::default() -> RepairOptions {
   { limits: RepairLimits::default(), json5: false, max_blocks: 128, }
 }
 
 ///|
-/// Protocol handling for a model reply. Wrap the existing RepairOptions so
-/// exhaustive literals and function references from earlier releases still
-/// work. Reasoning isolation is opt-in.
+/// Repair options plus optional isolation of case-insensitive think tags.
+/// Batch repair, extraction, and streams share the policy.
 #derive(Eq, Debug)
 pub(all) struct RepairPolicy {
   options : RepairOptions
@@ -194,11 +213,14 @@ pub(all) struct RepairPolicy {
 }
 
 ///|
+/// Use default `RepairOptions` and treat reasoning tags as ordinary input.
 pub fn RepairPolicy::default() -> RepairPolicy {
   { options: RepairOptions::default(), ignore_think_blocks: false, }
 }
 
 ///|
+/// Set reasoning isolation while preserving the current repair limits,
+/// numeric options, and extraction budget.
 pub fn RepairOptions::with_ignore_think_blocks(
   self : RepairOptions,
   ignore_think_blocks : Bool,

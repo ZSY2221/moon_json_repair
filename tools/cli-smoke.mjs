@@ -162,6 +162,16 @@ async function scenario(name, verify) {
 try {
   const schema = fixture("schema.json", '{"type":"object","properties":{"n":{"type":"integer","minimum":0}},"required":["n"]}');
   const malformedSchema = fixture("malformed-schema.json", '{"missing":');
+  const tools = fixture("tool-schemas.json", JSON.stringify({
+    write_file: {
+      type: "object", properties: { n: { type: "integer", minimum: 0 } }, required: ["n"],
+    },
+    read_file: {
+      type: "object", properties: { path: { type: "string" } }, required: ["path"],
+    },
+  }));
+  const invalidTools = fixture("bad-tool-schemas.json", "[]");
+  const mcp = ["--mcp-guard", "--tool-schemas", tools, "--strict-exit"];
   const batchText = '{"n":9007199254740993\r\n\r\n{"n":-1}\n{"n":2,}';
   const batch = fixture("input.ndjson", batchText);
   const input = fixture("input.json", '{"n":4,}');
@@ -341,6 +351,63 @@ try {
     assert.equal(eofFinal.finish_reason, "eof");
     errorReport(run(["--emit-patches"]), 2, "usage");
     errorReport(run(["--sse", "--ndjson"]), 2, "usage");
+  });
+
+  await scenario("MCP forwards exact requests and notifications before EOF", async () => {
+    const initialize = '  {"jsonrpc":"2.0","id":9007199254740993,"method":"initialize","params":{}} \t';
+    const notify = '{"jsonrpc":"2.0","method":"notifications/initialized"}';
+    const result = await runSegmentedPipe(mcp, initialize + "\r\n", notify + "\n", true);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout, initialize + "\n" + notify + "\n");
+  });
+
+  await scenario("MCP file input routes multiple schemas and keeps large numeric lexemes", () => {
+    const write = '{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"write_file","arguments":"{\\"n\\":\\"9007199254740993\\""}';
+    const read = '{"jsonrpc":"2.0","id":"read","method":"tools/call","params":{"name":"read_file","arguments":{"path":"src/main.mbt"}}}';
+    const input = fixture("mcp.ndjson", write + "\r\n" + read);
+    const result = run([...mcp, "--coerce", input]);
+    const [repaired, forwarded] = reports(result, 0);
+    assert.equal(repaired.params.name, "write_file");
+    assert.match(result.stdout, /"id":9007199254740993/);
+    assert.match(result.stdout, /"arguments":\{"n":9007199254740993\}/);
+    assert.equal(forwarded.params.arguments.path, "src/main.mbt");
+    assert.equal(result.stdout.split("\n")[1], read);
+  });
+
+  await scenario("MCP rejects invalid parameters and suppresses tool notifications", () => {
+    const invalid = '{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"write_file","arguments":{"n":-1}}}';
+    const notification = '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"write_file","arguments":{"n":1}}}';
+    const result = run(mcp, invalid + "\n" + notification + "\n");
+    const rows = reports(result, 3);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].jsonrpc, "2.0");
+    assert.equal(rows[0].error.code, -32602);
+    assert.equal(rows[0].error.data.issues[0].path, "$.params.arguments.n");
+    assert.match(rows[0].error.data.retry_prompt, /\$\.n/);
+    assert.match(result.stdout, /"id":9007199254740993/);
+    assert.deepEqual(reports(run(mcp.slice(0, -1), invalid + "\n"), 0), rows);
+  });
+
+  await scenario("MCP resumes after malformed UTF-8 and invalid transport records", () => {
+    const invalid = '{"jsonrpc":"2.0","id":"bad","method":"tools/call","params":{"name":"write_file","arguments":{"n":-1}}}';
+    const input = Buffer.concat([
+      Buffer.of(0xff, 0x0a),
+      Buffer.from(invalid + '\n{"jsonrpc":"2.0","id":"ok","method":"tools/list"}\n'),
+    ]);
+    const rows = reports(run(mcp, input), 1);
+    assert.equal(rows[0].id, null);
+    assert.equal(rows[0].error.code, -32700);
+    assert.equal(rows[0].error.data.kind, "invalid_utf8");
+    assert.equal(rows[1].error.code, -32602);
+    assert.equal(rows[2].method, "tools/list");
+  });
+
+  await scenario("MCP validates the registry once and keeps startup errors on stderr", () => {
+    errorReport(run(["--mcp-guard"]), 2, "usage");
+    errorReport(run(["--mcp-guard", "--tool-schemas", invalidTools], "{}\n"), 1, "tool_schemas");
+    errorReport(run(["--mcp-guard", "--tool-schemas", malformedSchema], "{}\n"), 1, "schema_parse");
+    errorReport(run([...mcp, "--sse"]), 2, "usage");
   });
   console.log(`Native CLI process scenarios: ${passed}/${passed} passed.`);
 } finally {

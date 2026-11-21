@@ -559,6 +559,14 @@ fn invalid_utf16_at(input : String) -> Int32? {
 ///|
 /// Repair one JSON document and record the edits against the original input.
 /// Ambiguous values such as duplicate keys and malformed numbers return Err.
+///
+/// ```mbt check
+/// test {
+///   let report = @json_repair.repair("{amount:42").unwrap()
+///   assert_eq(report.json, "{\"amount\":42}")
+///   assert_true(!report.edits.is_empty())
+/// }
+/// ```
 pub fn repair(
   input : String,
   limits~ : RepairLimits = RepairLimits::default(),
@@ -567,7 +575,8 @@ pub fn repair(
 }
 
 ///|
-/// Repair one document, with extensions enabled only when explicitly requested.
+/// Repair one document with explicit numeric extensions and repair limits.
+/// Use `extract_all` for a reply with multiple independent documents.
 pub fn repair_with_options(
   input : String,
   options : RepairOptions,
@@ -577,8 +586,9 @@ pub fn repair_with_options(
 
 ///|
 /// Repair a model reply using the requested protocol policy. When reasoning
-/// is ignored, exact case-insensitive think tags outside strings are controls.
-/// An opened block without a matching close runs to EOF.
+/// isolation is enabled, case-insensitive think tags delimit discarded text.
+/// Valid JSON strings protect their literal tags. Unterminated reasoning
+/// runs to EOF unless a standalone close can recover an invalid quote boundary.
 pub fn repair_with_policy(
   input : String,
   policy : RepairPolicy,

@@ -1,18 +1,23 @@
 ///|
+/// Parsed options shared by single-document, NDJSON, SSE and MCP modes.
 pub struct Options {
   input : String?
   schema : String?
   ndjson : Bool
   sse : Bool
+  mcp_guard : Bool
+  tool_schemas : String?
   emit_patches : Bool
   extract_all : Bool
   ignore_think : Bool
+  json5 : Bool
   coerce : Bool
   retry_prompt : Bool
   strict_exit : Bool
 }
 
 ///|
+/// Fatal CLI diagnostic with the process exit status.
 pub(all) suberror CliFailure {
   CliFailure(Json, Int32)
 }
@@ -23,6 +28,7 @@ fn error_json(kind : String, message : String) -> Json {
 }
 
 ///|
+/// Raise a structured startup or transport failure.
 pub fn[T] fail_cli(
   kind : String,
   message : String,
@@ -32,15 +38,19 @@ pub fn[T] fail_cli(
 }
 
 ///|
+/// Parse switches, check mode-specific prerequisites, and resolve stdin.
 pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
   let mut options : Options = {
     input: None,
     schema: None,
     ndjson: false,
     sse: false,
+    mcp_guard: false,
+    tool_schemas: None,
     emit_patches: false,
     extract_all: false,
     ignore_think: false,
+    json5: false,
     coerce: false,
     retry_prompt: false,
     strict_exit: false,
@@ -58,6 +68,19 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
       }
       ["--schema"] if !positional_only =>
         fail_cli("usage", "--schema requires a file path", status=2)
+      ["--tool-schemas", path, .. rest] if !positional_only => {
+        if options.tool_schemas is Some(_) {
+          fail_cli(
+            "usage",
+            "--tool-schemas may only be supplied once",
+            status=2,
+          )
+        }
+        options = { ..options, tool_schemas: Some(path), }
+        continue rest
+      }
+      ["--tool-schemas"] if !positional_only =>
+        fail_cli("usage", "--tool-schemas requires a file path", status=2)
       ["--", .. rest] if !positional_only => {
         positional_only = true
         continue rest
@@ -66,12 +89,14 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
         options = match argument {
           "--ndjson" if !positional_only => { ..options, ndjson: true, }
           "--sse" if !positional_only => { ..options, sse: true, }
+          "--mcp-guard" if !positional_only => { ..options, mcp_guard: true, }
           "--emit-patches" if !positional_only =>
             { ..options, emit_patches: true, }
           "--extract-all" if !positional_only =>
             { ..options, extract_all: true, }
           "--ignore-think" if !positional_only =>
             { ..options, ignore_think: true, }
+          "--json5" if !positional_only => { ..options, json5: true, }
           "--coerce" if !positional_only => { ..options, coerce: true, }
           "--retry-prompt" if !positional_only =>
             { ..options, retry_prompt: true, }
@@ -91,7 +116,24 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
       }
     }
   }
-  if options.schema is None && (options.coerce || options.retry_prompt) {
+  if options.mcp_guard {
+    if options.tool_schemas is None {
+      fail_cli("usage", "--mcp-guard requires --tool-schemas", status=2)
+    }
+    if options.ndjson ||
+      options.sse ||
+      options.extract_all ||
+      options.schema is Some(_) ||
+      options.retry_prompt {
+      fail_cli(
+        "usage",
+        "--mcp-guard conflicts with --ndjson, --sse, --extract-all, --schema and --retry-prompt",
+        status=2,
+      )
+    }
+  } else if options.tool_schemas is Some(_) {
+    fail_cli("usage", "--tool-schemas requires --mcp-guard", status=2)
+  } else if options.schema is None && (options.coerce || options.retry_prompt) {
     fail_cli("usage", "--coerce and --retry-prompt require --schema", status=2)
   }
   if options.sse && (options.ndjson || options.extract_all) {
@@ -112,6 +154,7 @@ pub fn parse_args(args : ArrayView[String]) -> Options raise CliFailure {
 }
 
 ///|
+/// Read a strict schema document, preserving exact numbers and unique keys.
 pub fn parse_schema(text : String) -> Json raise CliFailure {
   @json.parse(
     text[:],
@@ -125,20 +168,28 @@ pub fn parse_schema(text : String) -> Json raise CliFailure {
 }
 
 ///|
+/// Repaired input before schema validation and CLI report generation.
 pub enum PreparedInput {
   Single(@repair.RepairReport)
   Multiple(Array[@repair.ExtractedBlock])
 }
 
 ///|
+fn cli_policy(options : Options) -> @repair.RepairPolicy {
+  let defaults = @repair.RepairOptions::default()
+  {
+    options: { ..defaults, json5: options.json5, },
+    ignore_think_blocks: options.ignore_think,
+  }
+}
+
+///|
+/// Repair one block or extract separate blocks according to the input mode.
 pub fn prepare_input(
   source : String,
   options : Options,
 ) -> Result[PreparedInput, Json] {
-  let policy : @repair.RepairPolicy = {
-    options: @repair.RepairOptions::default(),
-    ignore_think_blocks: options.ignore_think,
-  }
+  let policy = cli_policy(options)
   if options.extract_all {
     match @repair.extract_all_with_policy(source, policy) {
       Ok(blocks) if blocks.is_empty() =>
@@ -155,17 +206,20 @@ pub fn prepare_input(
 }
 
 ///|
+/// Structured CLI result and exit status before transport framing.
 pub struct Outcome {
   fields : Map[String, Json]
   status : Int32
 }
 
 ///|
+/// Return the existing CLI JSON report.
 pub fn Outcome::report(self : Outcome) -> Json {
   Json::object(self.fields)
 }
 
 ///|
+/// Attach the original physical line number to an NDJSON report.
 pub fn Outcome::for_line(self : Outcome, line : Int64) -> Json {
   let fields : Map[String, Json] = {
     "line": Json::number(line.to_double(), repr=line.to_string()),
@@ -233,6 +287,7 @@ fn present_report(
 }
 
 ///|
+/// Validate repaired values, optionally coerce them, and build the CLI report.
 pub fn present(
   input : PreparedInput,
   schema : Json?,
@@ -257,6 +312,7 @@ pub fn present(
 }
 
 ///|
+/// Combine stream statuses, giving input failures precedence over validation.
 pub fn merge_status(previous : Int32, next : Int32) -> Int32 {
   if previous == 1 || next == 1 {
     1
@@ -268,6 +324,7 @@ pub fn merge_status(previous : Int32, next : Int32) -> Int32 {
 }
 
 ///|
+/// Ignore accumulated line errors unless strict exit behavior was requested.
 pub fn batch_exit_status(options : Options, status : Int32) -> Int32 {
   if options.strict_exit {
     status
@@ -277,12 +334,14 @@ pub fn batch_exit_status(options : Options, status : Int32) -> Int32 {
 }
 
 ///|
+/// Result of reading one physical input line with its one-based position.
 pub struct BatchLine {
   line : Int64
   input : Result[String, Json]
 }
 
 ///|
+/// Repair and validate an NDJSON record while preserving transport failures.
 pub fn process_line(
   line : BatchLine,
   schema : Json?,
@@ -310,6 +369,7 @@ pub struct BatchLines {
 }
 
 ///|
+/// Start a bounded physical-line decoder with a UTF-16 text budget.
 pub fn BatchLines::new(max_chars~ : Int32) -> BatchLines {
   let max_chars = max_chars.clamp(
     min=0,
@@ -352,6 +412,7 @@ fn BatchLines::emit(self : BatchLines) -> BatchLine {
 }
 
 ///|
+/// Consume bytes up to the next LF or the end of the chunk.
 pub fn BatchLines::next(
   self : BatchLines,
   chunk : BytesView,
@@ -375,6 +436,7 @@ pub fn BatchLines::next(
 }
 
 ///|
+/// Emit a buffered final line at end of input.
 pub fn BatchLines::finish(self : BatchLines) -> BatchLine? {
   if self.buffer.is_empty() && !self.overflow {
     None

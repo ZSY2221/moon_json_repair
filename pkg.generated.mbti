@@ -19,6 +19,8 @@ pub fn extract_all_with_policy(String, RepairPolicy) -> Result[Array[ExtractedBl
 
 pub fn format_retry_prompt(@json.Json, @json.Json) -> String
 
+pub fn guard_mcp_tool_call(String, ToolSchemaRegistry, policy? : RepairPolicy, coerce? : Bool) -> McpGuardResult
+
 pub fn repair(String, limits? : RepairLimits) -> Result[RepairReport, RepairError]
 
 pub fn repair_with_options(String, RepairOptions) -> Result[RepairReport, RepairError]
@@ -78,6 +80,22 @@ pub(all) struct JsonPatch {
   value : @json.Json?
 }
 pub impl @json.ToJson for JsonPatch
+
+#derive(Eq, @debug.Debug, @json.ToJson)
+pub struct McpGuardAudit {
+  envelope_edits : Int32
+  argument_edits : Int32
+  coercions : Int32
+}
+
+#derive(Eq, @debug.Debug, @json.ToJson)
+pub struct McpGuardResult {
+  forward : Bool
+  frame : String?
+  tool : String?
+  audit : McpGuardAudit
+  error_code : Int32?
+}
 
 #derive(Eq, @debug.Debug, @json.ToJson)
 pub(all) struct PatchFrame {
@@ -185,6 +203,7 @@ pub fn RepairStream::scanned_units(Self) -> Int32
 pub fn RepairStream::status(Self) -> StreamStatus
 pub fn RepairStream::with_options(RepairOptions) -> Self
 pub fn RepairStream::with_policy(RepairPolicy) -> Self
+pub fn RepairStream::with_uncached_policy(RepairPolicy) -> Self
 
 #derive(Eq, @debug.Debug, @json.ToJson)
 pub(all) struct SourcePosition {
@@ -204,6 +223,13 @@ pub(all) struct StreamStatus {
   stable_offset : Int32
   finalized : Bool
 }
+
+pub struct ToolSchemaRegistry {
+  // private fields
+}
+pub fn ToolSchemaRegistry::from_json(@json.Json) -> Result[Self, ValidationError]
+pub fn ToolSchemaRegistry::new() -> Self
+pub fn ToolSchemaRegistry::register(Self, String, @json.Json) -> Result[Unit, ValidationError]
 
 #derive(Eq, @debug.Debug)
 pub struct ValidationError {

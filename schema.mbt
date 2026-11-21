@@ -9,11 +9,13 @@ pub struct ValidationError {
 }
 
 ///|
+/// Serialize the location and keyword with the human-readable diagnostic.
 pub impl ToJson for ValidationError with fn to_json(self) {
   { "path": self.path, "keyword": self.keyword, "message": self.message }
 }
 
 ///|
+/// Expose `ValidationError` serialization through the direct `to_json` method.
 pub extend ValidationError with ToJson::{to_json}
 
 ///|
