@@ -14,6 +14,7 @@ priv struct Cursor {
   edits : Array[RepairEdit]
   limits : RepairLimits
   json5 : Bool
+  mut seals : SealTrace?
 }
 
 ///|
@@ -32,6 +33,7 @@ fn Cursor::new(
     edits: [],
     limits,
     json5,
+    seals: None,
   }
 }
 
@@ -277,65 +279,91 @@ fn Cursor::read_string(
   self : Cursor,
   out : StringBuilder,
 ) -> Unit raise RepairFault {
-  let open = self.position()
+  ignore(self.copy_string(out))
+}
+
+///|
+// True means the original source interior is already the decoded value.
+fn Cursor::copy_string(
+  self : Cursor,
+  out : StringBuilder,
+) -> Bool raise RepairFault {
   let quote = self.peek()
-  self.consume(quote)
-  out.write_char('"')
+  let start = self.offset
+  let mut chunk = start
   if quote == '\'' {
+    let open = self.position()
+    self.consume(quote)
+    out.write_char('"')
     self.edit(
       NormalizeQuote,
       "replace opening apostrophe",
       open,
       replacement="\"",
     )
+    chunk = self.offset
+  } else {
+    self.consume(quote)
   }
-  let mut chunk = self.offset
+  let delimiter = quote.to_int()
   while !self.at_end() {
+    let mut end = self.offset
+    while end < self.limit {
+      let code = self.input[end].to_int()
+      if code < 32 || code == 34 || code == 92 || code == delimiter {
+        break
+      }
+      end += 1
+    }
+    self.advance_plain(end)
+    if self.at_end() {
+      break
+    }
     let c = self.peek()
     if c == quote {
-      let close = self.position()
-      out.write_view(self.span(chunk, close.offset))
-      self.consume(c)
-      out.write_char('"')
       if quote == '\'' {
+        let close = self.position()
+        out.write_view(self.span(chunk, close.offset))
+        self.consume(c)
+        out.write_char('"')
         self.edit(
           NormalizeQuote,
           "replace closing apostrophe",
           close,
           replacement="\"",
         )
-      }
-      return
-    }
-    if c == '\\' || c == '"' || c.to_int() < 32 {
-      let at = self.position()
-      out.write_view(self.span(chunk, at.offset))
-      if c == '\\' {
-        self.read_escape(quote, out)
       } else {
         self.consume(c)
-        let replacement = if c == '"' { "\\\"" } else { control_escape(c) }
-        out.write_string(replacement)
-        if c == '"' {
-          self.edit(
-            NormalizeQuote,
-            "escape double quote inside converted string",
-            at,
-            replacement~,
-          )
-        } else {
-          self.edit(
-            EscapeControl,
-            "escape raw control character",
-            at,
-            replacement~,
-          )
-        }
+        out.write_view(self.span(chunk, self.offset))
+        return chunk == start
       }
-      chunk = self.offset
+      return false
+    }
+    let at = self.position()
+    out.write_view(self.span(chunk, at.offset))
+    if c == '\\' {
+      self.read_escape(quote, out)
     } else {
       self.consume(c)
+      let replacement = if c == '"' { "\\\"" } else { control_escape(c) }
+      out.write_string(replacement)
+      if c == '"' {
+        self.edit(
+          NormalizeQuote,
+          "escape double quote inside converted string",
+          at,
+          replacement~,
+        )
+      } else {
+        self.edit(
+          EscapeControl,
+          "escape raw control character",
+          at,
+          replacement~,
+        )
+      }
     }
+    chunk = self.offset
   }
   out.write_view(self.span(chunk, self.offset))
   out.write_char('"')
@@ -345,16 +373,22 @@ fn Cursor::read_string(
     self.position(),
     replacement="\"",
   )
+  false
 }
 
 ///|
 fn Cursor::read_key(
   self : Cursor,
   out : StringBuilder,
-) -> Unit raise RepairFault {
+) -> String? raise RepairFault {
   if self.peek() is ('"' | '\'') {
-    self.read_string(out)
-    return
+    let start = self.offset
+    let plain = self.copy_string(out)
+    return if plain {
+      Some(self.span(start + 1, self.offset - 1).to_owned())
+    } else {
+      None
+    }
   }
   let at = self.position()
   if !is_identifier_start(self.peek()) {
@@ -369,13 +403,30 @@ fn Cursor::read_key(
   out.write_view(key)
   out.write_char('"')
   self.edit(QuoteKey, "quote bare object key", at, replacement="\"\{key}\"")
+  Some(key.to_owned())
+}
+
+///|
+// Update coordinates once for a run the caller has already proven has no CR/LF.
+fn Cursor::advance_plain(self : Cursor, end : Int32) -> Unit {
+  if end > self.offset {
+    self.column += end - self.offset
+    self.offset = end
+    self.after_cr = false
+  }
 }
 
 ///|
 fn Cursor::digits(self : Cursor) -> Unit {
-  while self.peek().is_ascii_digit() {
-    self.bump()
+  let mut end = self.offset
+  while end < self.limit {
+    let code = self.input[end].to_int()
+    if code < 48 || code > 57 {
+      break
+    }
+    end += 1
   }
+  self.advance_plain(end)
 }
 
 ///|

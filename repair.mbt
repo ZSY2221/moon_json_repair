@@ -162,7 +162,8 @@ fn Cursor::read_value(
   out : StringBuilder,
   depth : Int32,
 ) -> Unit raise RepairFault {
-  match self.peek() {
+  let first = self.peek()
+  match first {
     '{' | '[' as opener => {
       if depth >= self.limits.max_depth {
         self.reject(DepthLimit, "maximum JSON nesting depth exceeded")
@@ -185,6 +186,34 @@ fn Cursor::read_value(
         self.reject(UnexpectedToken, "expected a JSON value")
       }
   }
+  if self.seals is Some(seals) {
+    let synthetic_end = match self.edits.last() {
+      Some({ position, kind, .. }) if position.offset == self.offset =>
+        kind is (CloseString | CloseArray | CloseObject)
+      _ => false
+    }
+    let is_sealed = if first is ('{' | '[' | '"' | '\'') {
+      !synthetic_end
+    } else {
+      // A bare value can still grow at buffer EOF, including a full number.
+      self.offset < self.limit || self.limit < self.input.length()
+    }
+    seals.fields.push({ pointer: seals.path, is_sealed, })
+  }
+}
+
+///|
+fn Cursor::read_traced_member(
+  self : Cursor,
+  out : StringBuilder,
+  depth : Int32,
+  seals : SealTrace,
+  key : String,
+) -> Unit raise RepairFault {
+  let parent = seals.path
+  seals.path = pointer_child(parent, key)
+  self.read_value(out, depth)
+  seals.path = parent
 }
 
 ///|
@@ -265,8 +294,14 @@ fn Cursor::read_array(
 ) -> Unit raise RepairFault {
   self.skip_trivia()
   if !self.at_end() && self.peek() != ']' {
+    let mut index = 0
     while true {
-      self.read_value(out, depth)
+      if self.seals is Some(seals) {
+        self.read_traced_member(out, depth, seals, index.to_string())
+        index += 1
+      } else {
+        self.read_value(out, depth)
+      }
       match
         self.separator(']', c => {
           value_starts(c) || (self.json5 && c is ('.' | '+'))
@@ -324,7 +359,7 @@ fn Cursor::read_object(
       EndContainer => key_at
     }
     key_buffer.reset()
-    self.read_key(key_buffer)
+    let plain_key = self.read_key(key_buffer)
     self.skip_trivia()
     if self.at_end() {
       self.drop_member(member_at)
@@ -334,18 +369,22 @@ fn Cursor::read_object(
       self.reject(UnexpectedToken, "expected a colon after the object key")
     }
     let key_json = key_buffer.to_string()
-    let key = try @json.parse(key_json[:]) catch {
-      _ => {
-        self.reject(
-          UnexpectedToken,
-          "object key cannot be decoded as JSON",
-          at=key_at,
-        )
-        return
+    let key = if plain_key is Some(key) {
+      key
+    } else {
+      try @json.parse(key_json[:]) catch {
+        _ => {
+          self.reject(
+            UnexpectedToken,
+            "object key cannot be decoded as JSON",
+            at=key_at,
+          )
+          return
+        }
+      } noraise {
+        String(text) => text
+        _ => abort("object key lexer must produce a string")
       }
-    } noraise {
-      String(text) => text
-      _ => abort("object key lexer must produce a string")
     }
     if seen.contains(key) {
       self.reject(DuplicateKey, "duplicate object key", at=key_at)
@@ -362,7 +401,11 @@ fn Cursor::read_object(
     seen.add(key)
     out.write_string(key_json)
     out.write_char(':')
-    self.read_value(out, depth)
+    if self.seals is Some(seals) {
+      self.read_traced_member(out, depth, seals, key)
+    } else {
+      self.read_value(out, depth)
+    }
     preceding = self.separator('}', key_starts)
     if preceding is EndContainer {
       break
@@ -544,10 +587,24 @@ pub fn repair_with_policy(
   if !policy.ignore_think_blocks {
     return repair_with_options(input, options)
   }
+  repair_policy_traced(input, policy, None)
+}
+
+///|
+fn repair_policy_traced(
+  input : String,
+  policy : RepairPolicy,
+  seals : SealTrace?,
+) -> Result[RepairReport, RepairError] {
+  let options = policy.options
   let limits = options.limits.normalized()
   let original = Cursor::new(input[:], limits, json5=options.json5)
   if original.invalid_input(input) is Some(error) {
     return Err(error)
+  }
+  if !policy.ignore_think_blocks {
+    original.seals = seals
+    return original.report()
   }
   let ranges = original.think_ranges()
   if ranges.length() > limits.max_edits {
@@ -555,6 +612,7 @@ pub fn repair_with_policy(
   }
   let masked = mask_think_ranges(input, ranges)
   let cursor = Cursor::new(masked[:], limits, json5=options.json5)
+  cursor.seals = seals
   match cursor.report() {
     Ok(report) => merge_think_audits(report, ranges[:], limits.max_edits)
     Err(error) => Err(error)

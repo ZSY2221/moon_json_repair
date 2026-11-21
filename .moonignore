@@ -17,6 +17,8 @@
 !/coercion.mbt
 !/stream.mbt
 !/think.mbt
+!/incremental_think.mbt
+!/patch.mbt
 !/json_repair_test.mbt
 !/repair_audit_test.mbt
 !/repair_bench_test.mbt
@@ -27,6 +29,8 @@
 !/legacy_coverage_test.mbt
 !/scaling_bench_test.mbt
 !/think_test.mbt
+!/think_bench_wbtest.mbt
+!/patch_test.mbt
 
 !/cmd/
 /cmd/*

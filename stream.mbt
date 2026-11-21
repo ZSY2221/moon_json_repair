@@ -16,12 +16,13 @@ pub(all) struct StreamStatus {
 
 ///|
 /// One append-only buffer and a lexical framing checkpoint. Preview and
-/// finalize run the authoritative syntax repair. With reasoning isolation,
-/// status scans the masked prefix to handle tags split across any pushes.
+/// finalize run the authoritative syntax repair. Reasoning isolation consumes
+/// new code units as they arrive, including tags which span several chunks.
 pub struct RepairStream {
   priv buffer : StringBuilder
   priv options : RepairOptions
   priv ignore_think_blocks : Bool
+  priv mut thought_checkpoint : ThinkCheckpoint?
   priv mut scan : FrameScanner
   priv mut size : Int32
   priv mut line : Int32
@@ -30,6 +31,7 @@ pub struct RepairStream {
   priv mut stable_offset : Int32
   priv mut trailing : Bool
   priv mut finalized : Bool
+  priv mut previous_patch : Json
 }
 
 ///|
@@ -53,6 +55,11 @@ pub fn RepairStream::with_policy(policy : RepairPolicy) -> RepairStream {
     buffer: StringBuilder(),
     options: { ..options, limits, },
     ignore_think_blocks: policy.ignore_think_blocks,
+    thought_checkpoint: if policy.ignore_think_blocks {
+      Some(ThinkCheckpoint::new(limits.max_depth, options.json5))
+    } else {
+      None
+    },
     scan: FrameScanner::new(limits.max_depth),
     size: 0,
     line: 1,
@@ -61,6 +68,7 @@ pub fn RepairStream::with_policy(policy : RepairPolicy) -> RepairStream {
     stable_offset: 0,
     trailing: false,
     finalized: false,
+    previous_patch: Json::null(),
   }
 }
 
@@ -139,9 +147,11 @@ pub fn RepairStream::push(
   }
   self.buffer.write_string(chunk)
   let view = chunk[:]
-  if self.ignore_think_blocks {
+  if self.thought_checkpoint is Some(checkpoint) {
     for index in 0..<view.length() {
-      self.advance_position(char_at(view, index))
+      let unit = char_at(view, index)
+      self.advance_position(unit)
+      checkpoint.feed(unit, self.size)
     }
   } else {
     self.observe_chunk(view)
@@ -172,31 +182,35 @@ fn RepairStream::observe_chunk(self : RepairStream, view : StringView) -> Unit {
 }
 
 ///|
-/// Return the lexical checkpoint. The default path uses incremental framing.
-/// Opting into reasoning isolation recomputes framing from the masked prefix.
+/// Return the lexical checkpoint without scanning the accumulated source.
 pub fn RepairStream::status(self : RepairStream) -> StreamStatus {
-  if self.ignore_think_blocks && self.size != 0 {
-    let input = self.buffer.to_string()
-    let cursor = Cursor::new(input[:], self.options.limits)
-    let masked = mask_think_ranges(input, cursor.think_ranges())
-    let scan = RepairStream::with_options(self.options)
-    scan.observe_chunk(masked[:])
-    scan.finalized = self.finalized
-    return scan.status()
+  let (frame, stable_offset, trailing) = match self.thought_checkpoint {
+    Some(checkpoint) => checkpoint.framing()
+    None => (self.scan, self.stable_offset, self.trailing)
   }
-  let quote = match self.scan.mode {
+  let quote = match frame.mode {
     FrameString(char) => Some(char.to_string())
     _ => None
   }
   {
     position: self.position(),
-    depth: self.scan.depth,
-    stack: self.scan.closers.map(closer => closer.to_string()),
+    depth: frame.depth,
+    stack: frame.closers.map(closer => if closer == '}' { "}" } else { "]" }),
     quote,
-    in_comment: self.scan.mode is (FrameLineComment | FrameBlockComment),
-    stable: self.stable_offset != 0 && !self.trailing && !self.scan.damaged,
-    stable_offset: self.stable_offset,
+    in_comment: frame.mode is (FrameLineComment | FrameBlockComment),
+    stable: stable_offset != 0 && !trailing && !frame.damaged,
+    stable_offset,
     finalized: self.finalized,
+  }
+}
+
+///|
+/// Number of UTF-16 units consumed by the incremental checkpoint. Polling
+/// status does not add to it. Explicit JSON previews are tracked separately.
+pub fn RepairStream::scanned_units(self : RepairStream) -> Int32 {
+  match self.thought_checkpoint {
+    Some(checkpoint) => checkpoint.consumed
+    None => self.size
   }
 }
 
@@ -213,6 +227,22 @@ pub fn RepairStream::preview(
 }
 
 ///|
+/// Compute changes since the last successful patch frame. Errors leave the
+/// prior baseline in place. Fields describe physical source delimiters, not
+/// the synthetic delimiters used to build the preview.
+pub fn RepairStream::next_patches(
+  self : RepairStream,
+) -> Result[PatchFrame, RepairError] {
+  let trace = { path: "", fields: [], }
+  let policy = self.options.with_ignore_think_blocks(self.ignore_think_blocks)
+  repair_policy_traced(self.buffer.to_string(), policy, Some(trace)).map(report => {
+    let patches = diff_json_patches(self.previous_patch, report.value)
+    self.previous_patch = clone_patch_value(report.value)
+    { patches, fields: trace.fields, report, }
+  })
+}
+
+///|
 /// Seal the source and produce the same result as a batch repair of all chunks.
 /// Subsequent pushes fail until reset; the lexical source state stays visible.
 pub fn RepairStream::finalize(
@@ -226,6 +256,11 @@ pub fn RepairStream::finalize(
 pub fn RepairStream::reset(self : RepairStream) -> Unit {
   self.buffer.reset(keep_capacity=false)
   self.scan = FrameScanner::new(self.options.limits.max_depth)
+  if self.ignore_think_blocks {
+    self.thought_checkpoint = Some(
+      ThinkCheckpoint::new(self.options.limits.max_depth, self.options.json5),
+    )
+  }
   self.size = 0
   self.line = 1
   self.column = 1
@@ -233,4 +268,5 @@ pub fn RepairStream::reset(self : RepairStream) -> Unit {
   self.stable_offset = 0
   self.trailing = false
   self.finalized = false
+  self.previous_patch = Json::null()
 }

@@ -202,3 +202,29 @@ test "stream reset clears the old source and permits independent input" {
   assert_eq(report.value, [true])
   assert_true(report.edits.is_empty())
 }
+
+///|
+test "plain and escaped keys still collide with exact CRLF coordinates" {
+  let source = "{\r\n \"key\": 9007199254740993,\r\n \"\\u006bey\": 0}"
+  guard @json_repair.repair(source) is Err(error) else {
+    fail("decoded duplicate key should be rejected")
+  }
+  assert_eq(error.kind.code(), "duplicate_key")
+  assert_eq(error.position.line, 3)
+  assert_eq(error.position.column, 2)
+}
+
+///|
+test "trailing JSON5 decimal is not consumed as prose" {
+  let options : @json_repair.RepairOptions = {
+    ..@json_repair.RepairOptions::default(),
+    json5: true,
+  }
+  guard @json_repair.repair_with_options("Reply: {\"answer\":1}.5", options)
+    is Err(error) else {
+    fail("a competing number must not be stripped as prose")
+  }
+  assert_eq(error.kind.code(), "trailing_content")
+  let incomplete = @json_repair.repair("{\"answer\":").unwrap()
+  assert_eq(incomplete.edits[0].kind.code(), "drop_incomplete_member")
+}

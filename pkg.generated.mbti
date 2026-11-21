@@ -7,7 +7,11 @@ import {
 }
 
 // Values
+pub fn apply_json_patches(@json.Json, ArrayView[JsonPatch]) -> Result[@json.Json, String]
+
 pub fn coerce_with_schema(@json.Json, @json.Json, options? : CoercionOptions) -> CoercionReport
+
+pub fn diff_json_patches(@json.Json, @json.Json) -> Array[JsonPatch]
 
 pub fn extract_all(String, RepairOptions) -> Result[Array[ExtractedBlock], RepairError]
 
@@ -57,6 +61,28 @@ pub(all) struct ExtractedBlock {
   start : SourcePosition
   end : SourcePosition
   confidence : Int32
+  report : RepairReport
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) struct FieldSeal {
+  pointer : String
+  is_sealed : Bool
+}
+pub impl @json.ToJson for FieldSeal
+
+#derive(Eq, @debug.Debug)
+pub(all) struct JsonPatch {
+  op : String
+  path : String
+  value : @json.Json?
+}
+pub impl @json.ToJson for JsonPatch
+
+#derive(Eq, @debug.Debug, @json.ToJson)
+pub(all) struct PatchFrame {
+  patches : Array[JsonPatch]
+  fields : Array[FieldSeal]
   report : RepairReport
 }
 
@@ -151,9 +177,11 @@ pub struct RepairStream {
 }
 pub fn RepairStream::finalize(Self) -> Result[RepairReport, RepairError]
 pub fn RepairStream::new(limits? : RepairLimits) -> Self
+pub fn RepairStream::next_patches(Self) -> Result[PatchFrame, RepairError]
 pub fn RepairStream::preview(Self) -> Result[RepairReport, RepairError]
 pub fn RepairStream::push(Self, String) -> Result[Unit, RepairError]
 pub fn RepairStream::reset(Self) -> Unit
+pub fn RepairStream::scanned_units(Self) -> Int32
 pub fn RepairStream::status(Self) -> StreamStatus
 pub fn RepairStream::with_options(RepairOptions) -> Self
 pub fn RepairStream::with_policy(RepairPolicy) -> Self
