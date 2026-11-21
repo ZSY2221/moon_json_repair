@@ -287,6 +287,50 @@ details textarea { display: block; margin-top: 10px; width: 100%; min-height: 13
 .bench-action .stream-button { min-width: 0; }
 .bench-action span { color: var(--muted); text-align: center; font: 10px var(--mono); }
 
+.latency-card, .code-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #151b30;
+  overflow: hidden;
+}
+.latency-controls { display: flex; align-items: center; gap: 8px; }
+.latency-body { display: grid; gap: 8px; padding: 11px 15px 13px; }
+.latency-intro, .latency-state, .latency-legend {
+  margin: 0;
+  color: var(--muted);
+  font: 11px/1.5 var(--mono);
+}
+.latency-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; }
+.latency-legend span { display: inline-flex; gap: 6px; align-items: center; }
+.latency-legend span:first-child::before, .latency-legend span:nth-child(2)::before {
+  content: "";
+  width: 15px;
+  border-top: 2px solid var(--mint);
+}
+.latency-legend span:nth-child(2)::before { border-top: 2px dashed #ffba8c; }
+.latency-svg { display: block; width: 100%; height: 95px; background: #111528; border-radius: 5px; }
+.latency-grid { stroke: #303951; stroke-width: .7; }
+#latency-incremental { stroke: var(--mint); stroke-width: 1.8; }
+#latency-reference { stroke: #ffba8c; stroke-width: 1.4; stroke-dasharray: 4 2; }
+.latency-state { color: var(--text); }
+.code-card > summary { color: var(--text); }
+.code-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.code-grid section { min-width: 0; }
+.code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.code-toolbar h3 { margin: 0; font-size: 12px; }
+.code-grid pre {
+  max-height: 12rem;
+  margin: 6px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--editor);
+  color: var(--text);
+  font: 11px/1.5 var(--mono);
+}
+
 footer { display: flex; justify-content: space-between; padding: 19px 0 23px; color: var(--subtle); font: 11px/1.5 var(--mono); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -310,6 +354,8 @@ footer { display: flex; justify-content: space-between; padding: 19px 0 23px; co
   .benchmark { grid-template-columns: minmax(0, 1fr); }
   .bench-action { grid-template-columns: minmax(0, 1fr) minmax(26px, .42fr); }
   .bench-action span { grid-column: 1 / -1; text-align: left; }
+  .latency-card .panel-heading { flex-wrap: wrap; }
+  .code-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 460px) {
   .local { max-width: 13ch; }

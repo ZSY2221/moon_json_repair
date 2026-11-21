@@ -13,9 +13,13 @@ const elements = Object.fromEntries([
   "engine", "engine-wasm-option", "engine-status", "output-label", "trace-tab", "result-panel",
   "trace-panel", "fields", "fields-empty", "patches", "patches-empty", "patch-count",
   "bench-wasm", "bench-wasm-detail", "bench-wasm-size", "bench-js-size", "bench-ratio",
+  "enable-mcp", "schema-label", "schema-editor-label", "schema-input-label",
+  "latency-run", "latency-chunk", "latency-incremental", "latency-reference", "latency-range",
+  "latency-progress", "latency-state", "code-card", "moonbit-code", "cli-code", "copy-moonbit", "copy-cli",
 ].map((id) => [id, document.getElementById(id)]));
 
 const samples = [...examples, ...labFixtures];
+let sampleChunkWidth = null;
 let outputText = "";
 let rawReport = "";
 let pendingFrame = 0;
@@ -35,6 +39,11 @@ function bridge(api) {
     push: (chunk) => api.moonLabStreamPush(chunk),
     view: (...args) => api.moonLabStreamView(...args),
     repairOnly: (input) => api.moonLabRepairOnly(input),
+    guardMcp: (...args) => api.moonLabGuardMcp(...args),
+    benchStart: () => api.moonLabBenchStart(),
+    benchStep: (chunk, reference) => api.moonLabBenchStep(chunk, reference),
+    benchMatches: () => api.moonLabBenchMatches(),
+    benchFinish: () => api.moonLabBenchFinish(),
   };
 }
 
@@ -340,14 +349,63 @@ function showBlock(source, block, elapsed) {
   }
 }
 
+function renderMcp(source, registry, [json5, coerce, , ignoreThink]) {
+  showTrace(null);
+  paintSource(null);
+  showStreamStatus(null);
+  elements["block-picker"].hidden = true;
+  visualAudit = null;
+  if (!source.trim()) {
+    showOutput("Enter a JSON-RPC frame to inspect.", "idle");
+    showAudit([], "Repair counts will appear after the guard runs.");
+    showSchema("idle", "Pending", "Provide a tool schema registry for tools/call.");
+    return;
+  }
+  const started = performance.now();
+  const result = JSON.parse(activeEngine.guardMcp(source, registry, json5, coerce, ignoreThink));
+  const elapsed = (performance.now() - started).toFixed(2) + " ms";
+  if (result.registry_error) {
+    showOutput(result.registry_error, "failure", elapsed);
+    showAudit([], "The guard requires a valid tool schema registry.");
+    showSchema("fail", "Invalid registry", result.registry_error);
+    return;
+  }
+  if (result.frame) {
+    visualAudit = { output: jsonView(result.frame), edits: [] };
+    showOutput(visualAudit.output, "success", elapsed);
+    rawReport = result.frame;
+    elements.download.disabled = false;
+  } else {
+    showOutput("No response frame. A rejected notification has no request ID.", "failure", elapsed);
+  }
+  const { envelope_edits, argument_edits, coercions } = result.audit;
+  const audit = envelope_edits + " envelope edits · " + argument_edits + " argument edits · " + coercions + " coercions";
+  showAudit([], audit);
+  if (result.forward) {
+    showSchema("pass", "Forwarded", result.tool ? result.tool + " · " + audit : "JSON-RPC frame passed through.");
+  } else {
+    const details = result.frame ? JSON.parse(result.frame).error?.data : null;
+    showSchema("fail", "Blocked " + result.error_code, "The guard withheld this request.",
+      details?.issues ?? [], details?.retry_prompt ?? "");
+  }
+}
+
 function render() {
   const source = elements.source.value;
   const lines = setGutter(elements["source-gutter"], source, elements.source.scrollTop);
   elements["source-meta"].textContent = lines + (lines === 1 ? " line" : " lines") + "  ·  " + source.length + " UTF-16 units";
   const hasInput = Boolean(source || playback?.tokens.length);
-  elements.stream.disabled = !hasInput || Boolean(playback?.error);
-  elements.step.disabled = !hasInput || Boolean(playback?.done || playback?.error);
-  elements.replay.disabled = !hasInput;
+  const mcp = elements["enable-mcp"].checked;
+  elements.stream.disabled = mcp || !hasInput || Boolean(playback?.error);
+  elements.step.disabled = mcp || !hasInput || Boolean(playback?.done || playback?.error);
+  elements.replay.disabled = mcp || !hasInput;
+  elements["enable-extraction"].disabled = mcp;
+  elements["trace-tab"].disabled = mcp;
+  elements["output-label"].textContent = mcp ? "JSON-RPC frame" : "Repaired JSON";
+  elements["schema-label"].textContent = mcp ? "MCP guard decision" : "Schema validation";
+  elements["schema-editor-label"].textContent = mcp ? "Edit tool schema registry" : "Edit schema";
+  elements["schema-input-label"].textContent = mcp ? "Tool schema registry" : "JSON Schema";
+  elements.schema.placeholder = mcp ? '{"tool_name": {"type": "object"}}' : "Leave blank to skip validation";
 
   if (typeof globalThis.moonLabRun !== "function") {
     visualAudit = null;
@@ -355,11 +413,16 @@ function render() {
     showAudit([], "Repair output will appear after the engine loads.");
     showSchema("idle", "Pending", "Load the engine to run validation.");
     elements.benchmark.disabled = true;
+    elements["latency-run"].disabled = true;
     return;
   }
 
   const schema = elements.schema.value.trim();
   const options = repairOptions();
+  if (mcp) {
+    renderMcp(source, schema, options);
+    return;
+  }
   const started = performance.now();
   const raw = playback
     ? activeEngine.view(source, schema, options[1], options[2], playback.done)
@@ -446,7 +509,10 @@ function startPlayback(target) {
   if (!target) return;
   // Small groups of Unicode code points and delimiters model delta.arguments
   // chunks without pretending to use any provider's specific tokenizer.
-  const tokens = target.match(/[\p{L}\p{N}_]{1,5}|[ \t]{1,4}|\r\n|[\s\S]/gu) ?? [];
+  const tokens = sampleChunkWidth
+    ? Array.from({ length: Math.ceil(target.length / sampleChunkWidth) },
+      (_, index) => target.slice(index * sampleChunkWidth, (index + 1) * sampleChunkWidth))
+    : target.match(/[\p{L}\p{N}_]{1,5}|[ \t]{1,4}|\r\n|[\s\S]/gu) ?? [];
   playback = { tokens, target, next: 0, done: false, playing: false, error: false, clock: 0, balance: 0 };
   startLabSession();
   elements.source.value = "";
@@ -513,7 +579,7 @@ function play() {
 }
 
 function loadSample(index) {
-  const { input, schema, modes = {} } = samples[index];
+  const { input, schema, modes = {}, transport } = samples[index];
   resetPlayback();
   Array.from(elements.samples.children).forEach((button, buttonIndex) => {
     button.setAttribute("aria-pressed", String(buttonIndex === index));
@@ -524,11 +590,15 @@ function loadSample(index) {
   elements["enable-coercion"].checked = Boolean(modes.coerce);
   elements["enable-extraction"].checked = Boolean(modes.extract);
   elements["enable-ignore-think"].checked = Boolean(modes.ignoreThink);
+  elements["enable-mcp"].checked = Boolean(modes.mcp);
+  sampleChunkWidth = transport ?? null;
+  if (modes.mcp) selectOutputTab(false);
   elements.source.scrollTop = 0;
   elements["output-wrap"].scrollTop = 0;
   blockIndex = 0;
   auditIndex = -1;
   scheduleRender();
+  refreshCodeSnippets();
 }
 
 async function copyText(text, fallback) {
@@ -561,12 +631,18 @@ for (const [index, sample] of samples.entries()) {
 
 elements.source.addEventListener("input", () => {
   resetPlayback();
+  sampleChunkWidth = null;
   for (const button of elements.samples.children) button.setAttribute("aria-pressed", "false");
   blockIndex = 0;
   auditIndex = -1;
   scheduleRender();
+  refreshCodeSnippets();
 });
-elements.schema.addEventListener("input", () => { auditIndex = -1; scheduleRender(); });
+elements.schema.addEventListener("input", () => {
+  auditIndex = -1;
+  scheduleRender();
+  refreshCodeSnippets();
+});
 elements.engine.addEventListener("change", () => {
   activeEngine = elements.engine.value === "wasm" && wasmEngine ? wasmEngine : jsEngine;
   if (playback) {
@@ -577,6 +653,7 @@ elements.engine.addEventListener("change", () => {
 });
 
 function selectOutputTab(trace) {
+  if (trace && elements["enable-mcp"].checked) return;
   for (const [id, active] of [["output-label", !trace], ["trace-tab", trace]]) {
     elements[id].setAttribute("aria-selected", String(active));
     elements[id].tabIndex = active ? 0 : -1;
@@ -597,8 +674,12 @@ for (const [id, trace] of [["output-label", false], ["trace-tab", true]]) {
     elements[next ? "trace-tab" : "output-label"].focus();
   });
 }
-for (const id of ["enable-json5", "enable-coercion", "enable-extraction", "enable-ignore-think"]) {
+for (const id of ["enable-json5", "enable-coercion", "enable-extraction", "enable-ignore-think", "enable-mcp"]) {
   elements[id].addEventListener("change", () => {
+    if (id === "enable-mcp" && elements[id].checked) {
+      resetPlayback();
+      selectOutputTab(false);
+    }
     if (playback && id !== "enable-coercion") {
       startLabSession();
       activeEngine.push(elements.source.value);
@@ -606,6 +687,7 @@ for (const id of ["enable-json5", "enable-coercion", "enable-extraction", "enabl
     auditIndex = -1;
     blockIndex = 0;
     scheduleRender();
+    refreshCodeSnippets();
   });
 }
 elements.source.addEventListener("scroll", syncSourceScroll);
@@ -719,4 +801,5 @@ elements.benchmark.addEventListener("click", async () => {
   }
 });
 
+connectLabTools();
 loadSample(0);

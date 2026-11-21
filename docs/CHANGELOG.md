@@ -1,5 +1,13 @@
 # 更新记录 / Changelog
 
+## 0.4.0
+
+- 流式预览复用可证明安全的解析检查点，保留原有报告和审计语义。 / Reuse safe parsing checkpoints for streaming previews and preserve report and audit semantics.
+- 通过 MoonBit API 或 `--mcp-guard` 按工具名校验 MCP JSON-RPC 请求，保留请求 ID 的原始十进制。 / Validate MCP tool requests by name through the MoonBit API or `--mcp-guard` while preserving decimal request IDs.
+- 演练台新增 50 KB 流式延迟实测曲线、MCP 放行与拒绝案例，以及 MoonBit 和 PowerShell 代码复制。 / Add a measured 50 KB latency plot, MCP allow and reject examples, and copyable MoonBit and PowerShell snippets.
+- 增补公开 API 文档和可执行的 MCP 示例。 / Document the public API and add an executable MCP example.
+- Wasm GC 与 JS 各通过 790 项，含新增 1,152 条固定种子差分输入，Wasm GC 核心覆盖 2,668/2,680。 / Both Wasm GC and JS passed 790 tests, with 1,152 added seeded differential inputs and 2,668/2,680 Wasm GC core coverage points.
+
 ## 0.3.0
 
 - 推理标签检查点保留嵌套草稿中待决的单双引号恢复。 / Incremental reasoning checkpoints preserve overlapping recovery decisions for nested quoted drafts.

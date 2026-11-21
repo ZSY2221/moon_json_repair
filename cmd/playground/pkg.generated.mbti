@@ -2,6 +2,16 @@
 package "ZSY2221/json_repair/cmd/playground"
 
 // Values
+pub fn lab_bench_finish() -> Bool
+
+pub fn lab_bench_matches() -> Bool
+
+pub fn lab_bench_start() -> Unit
+
+pub fn lab_bench_step(String, Bool) -> Bool
+
+pub fn lab_guard_mcp(String, String, Bool, Bool, Bool) -> String
+
 pub fn lab_repair_only(String) -> Bool
 
 pub fn lab_run(String, String, Bool, Bool, Bool, Bool) -> String

@@ -1,6 +1,17 @@
 # Moon JSON Repair
 
-Executable examples for the public MoonBit package.
+Repair a single JSON reply, extract independent documents, or feed a
+`RepairStream` to inspect an incomplete argument payload. Repairs retain
+decimal spellings and original UTF-16 audit coordinates. Tool-call validation
+uses a bounded JSON Schema subset. Native command modes consume NDJSON, SSE,
+or MCP JSON-RPC frames. The core has no external MoonBit packages or FFI.
+
+| Task | API |
+| --- | --- |
+| Repair one document | `repair` or `repair_with_policy` |
+| Apply live changes | `RepairStream::next_patches` and `apply_json_patches` |
+| Route and validate MCP arguments | `ToolSchemaRegistry` and `guard_mcp_tool_call` |
+| Gate execution | `validate`, `coerce_with_schema`, and `format_retry_prompt` |
 
 ```mbt check
 ///|
@@ -152,5 +163,26 @@ test "apply patches as a tool field seals" {
       field.pointer == "/args/order~1id" && field.is_sealed
     }),
   )
+}
+```
+
+```mbt check
+///|
+test "guard a tool call and preserve exact decimal text" {
+  let schemas : Json = {
+    "sum": {
+      "type": "object",
+      "required": ["x"],
+      "properties": { "x": { "type": "integer" } },
+    },
+  }
+  let routes = @json_repair.ToolSchemaRegistry::from_json(schemas).unwrap()
+  let source =
+    #|{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"sum","arguments":{"x":"9007199254740993"}}}
+  let result = @json_repair.guard_mcp_tool_call(source, routes, coerce=true)
+  assert_true(result.forward)
+  let frame = result.frame.unwrap()
+  assert_true(frame.contains("\"id\":9007199254740993"))
+  assert_true(frame.contains("\"x\":9007199254740993"))
 }
 ```

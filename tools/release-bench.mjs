@@ -14,6 +14,8 @@ const [flag, distribution, ...extra] = process.argv.slice(2);
 if (extra.length || (flag && (flag !== "--native-wsl" || !distribution || platform() !== "win32"))) {
   throw new Error("Usage: node tools/release-bench.mjs [--native-wsl DISTRO]");
 }
+const targets = ["js", "wasm-gc"];
+if (platform() !== "win32" || distribution) targets.push("native");
 const tempRoot = realpathSync(tmpdir());
 const prefix = "moon-json-repair-bench-";
 const workspace = mkdtempSync(join(tempRoot, prefix));
@@ -216,6 +218,34 @@ function measureReasoning(moduleName, target) {
   }
 }
 
+function measureWriteFile(moduleName, target) {
+  const output = runMoon([
+    "bench", "--target", target, "--release", "--no-parallelize", "--deny-warn",
+    "--package", moduleName, "--file", "incremental_bench_test.mbt",
+  ], target === "native" && Boolean(distribution), repository);
+  const toMicros = { ns: 0.001, "µs": 1, "μs": 1, us: 1, ms: 1000, s: 1_000_000 };
+  const means = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const row = line.match(/^(write-file-(?:preview|patch)-(?:reference|cached)-\d+-\d+)\s+([\d.]+)\s+(ns|[µμu]s|ms|s)\s+±/);
+    if (row) means.set(row[1], Number(row[2]) * toMicros[row[3]]);
+  }
+  assert.equal(means.size, 16, "Missing write_file benchmark results:\n" + output);
+  const round = value => Number(value.toFixed(2));
+  for (const bytes of [10_000, 50_000]) {
+    for (const chunk of [64, 256]) {
+      for (const operation of ["preview", "patch"]) {
+        const referenceUs = means.get("write-file-" + operation + "-reference-" + bytes + "-" + chunk);
+        const cachedUs = means.get("write-file-" + operation + "-cached-" + bytes + "-" + chunk);
+        console.log(JSON.stringify({
+          benchmark: "write_file", target, bytes, chunk, operation,
+          referenceUs, cachedUs, referenceMBps: round(bytes / referenceUs),
+          cachedMBps: round(bytes / cachedUs), speedup: round(referenceUs / cachedUs),
+        }));
+      }
+    }
+  }
+}
+
 try {
   const manifest = readFileSync(join(repository, "moon.mod"), "utf8");
   const module = manifest.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
@@ -255,12 +285,13 @@ try {
   }));
   const require = createRequire(import.meta.url);
   console.table(measureFixtures(require(compile("timing", "js"))));
-  for (const target of ["js", "wasm-gc", "native"]) {
+  for (const target of targets) {
     const strictSize = fileSizes(compile("strict_probe", target));
     const repairSize = fileSizes(compile("repair_probe", target));
     console.log(JSON.stringify({ target, strict: strictSize, repair: repairSize }));
     measureScaling(module, target);
     measureReasoning(module, target);
+    measureWriteFile(module, target);
   }
 } finally {
   const target = realpathSync(workspace);

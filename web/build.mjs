@@ -9,6 +9,7 @@ const options = { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding:
 
 function artifact(target) {
   const args = ["build", "cmd/playground", "--target", target, "--release", "--deny-warn", "--output-json"];
+  if (target === "wasm-gc") args.push("--strip");
   let build = spawnSync("moon", args, options);
   if (build.error?.code === "ENOENT") {
     const executable = process.platform === "win32" ? "moon.exe" : "moon";

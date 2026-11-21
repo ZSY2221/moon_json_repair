@@ -310,22 +310,58 @@ try {
   assert.match(await page.locator("#bench-wasm-size").textContent(), /KiB gzip/);
   assert.equal(await page.locator("#bench-progress").evaluate(bar => bar.value), 10_000);
 
+  await sample("50 KB write_file");
+  const generated = await outputHas("generated.js");
+  assert.equal(Buffer.byteLength(generated.args.content), 50_000);
+  await page.locator("#latency-run").click();
+  await wait("#latency-state", "snapshots matched");
+  assert.match(await page.locator("#latency-state").textContent(), /^Wasm GC · \d+ snapshots matched/);
+  for (const lane of ["incremental", "reference"]) {
+    assert.ok((await page.locator("#latency-" + lane).getAttribute("points")).split(" ").length > 190);
+  }
+  const streamLatency = await page.locator("#latency-state").textContent();
+
   if (process.argv.includes("--screenshot")) {
+    await sample("Patch stream");
+    await outputHas("9007199254740993");
     await ignoredThink.click();
     await page.getByRole("tab", { name: "Live patches" }).click();
-    await page.locator('#patches [data-op="add"]').last().evaluate(row => {
-      const list = row.parentElement;
-      list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    await page.locator("#stream").click();
+    await wait("#stream-count", "Finalized");
+    await page.locator(".latency-card").evaluate(panel => {
+      const bottom = panel.getBoundingClientRect().bottom + window.scrollY;
+      window.scrollTo(0, Math.max(0, bottom - window.innerHeight + 12));
     });
-    await page.evaluate(() => window.scrollTo(0, 0));
-    const benchBounds = await page.locator(".benchmark").boundingBox();
-    assert.ok(benchBounds.y + benchBounds.height <= 1080, "Benchmark must remain inside the capture.");
+    const chartBounds = await page.locator(".latency-card").boundingBox();
+    assert.ok(chartBounds.y + chartBounds.height <= 1080, "Stream comparison must appear in the capture.");
     const png = await page.screenshot({ path: resolve(root, "screenshot.png"), animations: "disabled" });
     assert.equal(png.readUInt32BE(16), 1920);
     assert.equal(png.readUInt32BE(20), 1080);
   }
 
-  const expectedAssets = ["", "style.css", "engine.js", "engine-wasm.js", "examples.js", "json-view.js", "app.js"];
+  await sample("MCP tools/call");
+  await wait("#schema-state", "Forwarded");
+  const forwarded = await outputHas("hello from MoonBit");
+  assert.equal(forwarded.params.arguments.content, "hello from MoonBit");
+  const guardDownloadEvent = page.waitForEvent("download");
+  await page.locator("#download").click();
+  const guardDownload = await guardDownloadEvent;
+  assert.match(await readFile(await guardDownload.path(), "utf8"), /"id":9007199254740993/);
+  await sample("MCP invalid params");
+  const rejected = await outputHas("-32602");
+  await wait("#schema-state", "Blocked -32602");
+  assert.ok(rejected.error.data.issues.some(({ path }) => path.startsWith("$.params.arguments")));
+  await page.getByText("Run this configuration locally", { exact: true }).click();
+  await wait("#moonbit-code", "@repair.guard_mcp_tool_call");
+  await wait("#cli-code", "--mcp-guard --tool-schemas $labSchema");
+  await page.locator("#enable-ignore-think").check();
+  await wait("#cli-code", "--ignore-think");
+  await page.locator("#copy-cli").click();
+  await wait("#copy-cli", "Copied");
+  assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n"),
+    await page.locator("#cli-code").textContent());
+
+  const expectedAssets = ["", "style.css", "engine.js", "engine-wasm.js", "examples.js", "json-view.js", "lab-tools.js", "app.js"];
   for (const asset of expectedAssets) assert.ok(paths.has(subpath + asset), "Missing " + asset);
   assert.deepEqual(errors, []);
   const narrow = await context.newPage();
@@ -336,6 +372,9 @@ try {
   await narrow.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
   await narrow.getByRole("button", { name: "Patch stream", exact: true }).click();
   await narrow.getByRole("tab", { name: "Live patches" }).click();
+  assert.ok(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  await narrow.getByRole("button", { name: "MCP tools/call", exact: true }).click();
+  await narrow.getByText("Run this configuration locally", { exact: true }).click();
   assert.ok(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
 
   const offline = await browser.newContext({ offline: true });
@@ -358,7 +397,7 @@ try {
   await fallback.waitForFunction(() => document.getElementById("schema-state").textContent === "Pass");
   assert.deepEqual(errors, []);
 
-  console.log("Edge/Chromium " + browser.version() + " at " + site + " · 7 local assets · 0 HTTP errors and 0 console errors");
+  console.log("Edge/Chromium " + browser.version() + " at " + site + " · 8 local assets · 0 HTTP errors and 0 console errors");
   console.log("Stream replay, pause, step, finalize, stack, and schema state changes verified.");
   console.log("Three extracted calls, JSON5, schema coercion, exact dual highlights, and retry prompt copy verified.");
   console.log("Think mode: mixed-case tags, literal markers, open and streamed blocks, source projection, and exact download verified.");
@@ -369,6 +408,8 @@ try {
     console.log(label + " · 10,000 attempts · " + await page.locator("#bench-" + id).textContent() + " · " + await page.locator("#bench-" + id + "-detail").textContent());
   }
   console.log(await page.locator("#bench-ratio").textContent());
+  console.log(streamLatency);
+  console.log("MCP tool forwarding, -32602, exact ID download, and clipboard code options verified.");
   console.log("390px viewport, offline file:// Wasm GC, and JS fallback verified.");
 } finally {
   if (browser) await browser.close();

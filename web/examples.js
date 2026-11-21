@@ -9,6 +9,41 @@ const toolSchema = (tool, properties) => ({
   },
 });
 
+const writeFileSchema = {
+  path: { type: "string", minLength: 1 },
+  content: { type: "string" },
+};
+
+function writeFilePayload() {
+  let code = "// Generated JavaScript modules for the stream benchmark.\n";
+  for (let index = 0; ; index++) {
+    const line = 'export const entry' + index + ' = {name: "item", path: "./item.js"};\n';
+    if (code.length + line.length + 2 > 50_000) break;
+    code += line;
+  }
+  code += "//" + " ".repeat(50_000 - code.length - 2);
+  const frame = JSON.stringify({
+    tool: "write_file",
+    args: { path: "generated.js", content: code },
+  });
+  // The source finishes in the value string, like a real interrupted tool call.
+  return frame.slice(0, -3);
+}
+
+const writeFileInput = writeFilePayload();
+const mcpRegistry = {
+  write_file: {
+    type: "object",
+    required: ["path", "content"],
+    properties: writeFileSchema,
+  },
+};
+
+function truncatedMcpCall(argumentsText) {
+  return '{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":' +
+    '{"name":"write_file","arguments":' + JSON.stringify(argumentsText);
+}
+
 const examples = [
   {
     label: "Stream cut",
@@ -179,5 +214,23 @@ const labFixtures = [
         },
       },
     },
+  },
+  {
+    label: "50 KB write_file",
+    input: writeFileInput,
+    schema: toolSchema("write_file", writeFileSchema),
+    transport: 256,
+  },
+  {
+    label: "MCP tools/call",
+    input: truncatedMcpCall("{path:'notes.md', content:'hello from MoonBit'"),
+    schema: mcpRegistry,
+    modes: { mcp: true },
+  },
+  {
+    label: "MCP invalid params",
+    input: truncatedMcpCall("{path:'', content:17"),
+    schema: mcpRegistry,
+    modes: { mcp: true, coerce: true },
   },
 ];

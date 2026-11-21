@@ -5,22 +5,10 @@ pub fn run_payload(source : String, schema_text : String) -> String {
   let outcome : Json = match @repair.repair(source) {
     Err(error) => { "ok": false, "error": @json.to_json(error) }
     Ok(report) => {
-      let validation : Json = if schema_text == "" {
-        { "state": "skipped" }
-      } else {
-        try {
-          let schema = @json.parse(
-            schema_text[:],
-            preserve_number_repr=true,
-            reject_duplicate_keys=true,
-          )
-          {
-            "state": "checked",
-            "errors": @json.to_json(@repair.validate(report.value, schema)),
-          }
-        } catch {
-          error => { "state": "invalid_json", "message": error.to_string() }
-        }
+      let validation = match read_lab_schema(schema_text) {
+        LabSkip => lab_skipped()
+        LabInvalid(message) => lab_invalid(message)
+        LabParsed(schema) => lab_checked(@repair.validate(report.value, schema))
       }
       { "ok": true, "report": @json.to_json(report), "validation": validation }
     }
@@ -52,6 +40,21 @@ fn read_lab_schema(schema_text : String) -> LabSchema {
 }
 
 ///|
+fn lab_skipped() -> Json {
+  { "state": "skipped" }
+}
+
+///|
+fn lab_invalid(message : String) -> Json {
+  { "state": "invalid_json", "message": message }
+}
+
+///|
+fn lab_checked(errors : Array[@repair.ValidationError]) -> Json {
+  { "state": "checked", "errors": @json.to_json(errors) }
+}
+
+///|
 fn lab_block(
   report : @repair.RepairReport,
   start : @repair.SourcePosition,
@@ -62,14 +65,9 @@ fn lab_block(
   trace : Json?,
 ) -> Json {
   let (output, value, coercions, validation, retry_prompt) = match schema {
-    LabSkip => {
-      let validation : Json = { "state": "skipped" }
-      (report.json, report.value, Json::array([]), validation, "")
-    }
-    LabInvalid(message) => {
-      let validation : Json = { "state": "invalid_json", "message": message }
-      (report.json, report.value, Json::array([]), validation, "")
-    }
+    LabSkip => (report.json, report.value, Json::array([]), lab_skipped(), "")
+    LabInvalid(message) =>
+      (report.json, report.value, Json::array([]), lab_invalid(message), "")
     LabParsed(schema) => {
       let (output, value, edits, errors) = if coerce {
         let treatment = @repair.coerce_with_schema(report.value, schema, options={
@@ -91,16 +89,12 @@ fn lab_block(
           @repair.validate(report.value, schema),
         )
       }
-      let validation : Json = {
-        "state": "checked",
-        "errors": @json.to_json(errors),
-      }
       let retry = if errors.is_empty() {
         ""
       } else {
         @repair.format_retry_prompt(value, schema)
       }
-      (output, value, edits, validation, retry)
+      (output, value, edits, lab_checked(errors), retry)
     }
   }
   let block : Map[String, Json] = {
