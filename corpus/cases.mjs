@@ -179,4 +179,53 @@ export const corpus = [
     id: "guard-missing-value", group: "guard",
     source: '{"tool":}', error: "unexpected_token",
   },
+  {
+    id: "reasoning-nested-before-arguments", group: "reasoning", ignoreThink: true, ignored: 1,
+    source: "<think>{guess:1}<ThInK>[false]</tHiNk></think>\r\n{tool:'locate',args:{query:'月亮'}}",
+    output: ['{"tool":"locate","args":{"query":"月亮"}}'],
+  },
+  {
+    id: "reasoning-after-completed-call", group: "reasoning", ignoreThink: true, ignored: 1,
+    source: '{"ready":true}\n<think>{"draft":false',
+    output: ['{"ready":true}'],
+  },
+  {
+    id: "stream-final-key-without-value", group: "stream",
+    source: '{"tool":"echo","retry":',
+    output: ['{"tool":"echo"}'],
+  },
+  {
+    id: "stream-low-code-unit", group: "stream",
+    source: '{"text":"\udc00"}', error: "invalid_unicode",
+  },
+  {
+    id: "stream-assembled-array-arguments", group: "stream",
+    source: '{"calls":[{"tool":"one"},{"tool":"two"',
+    output: ['{"calls":[{"tool":"one"},{"tool":"two"}]}'],
+  },
+  {
+    id: "format-comment-between-two-members", group: "format",
+    source: '{"name":"lookup",/* ignored metadata */ id:42,}',
+    output: ['{"name":"lookup","id":42}'],
+  },
+  {
+    id: "number-beyond-uint64", group: "number",
+    source: '{"sequence":18446744073709551617}',
+    output: ['{"sequence":18446744073709551617}'],
+  },
+  {
+    id: "number-preserve-pricing-precision", group: "number",
+    source: '{"amount":0.100000000000000000000001}',
+    output: ['{"amount":0.100000000000000000000001}'],
+  },
+  {
+    id: "schema-coerce-wide-id", group: "schema", coerce: true,
+    schema: { properties: { id: { type: "integer" } } },
+    source: '{"id":"9007199254740993"}',
+    output: ['{"id":9007199254740993}'], errors: [], coercions: ["$.id"],
+  },
+  {
+    id: "guard-two-competing-top-level-calls", group: "guard",
+    source: '{"tool":"draft"}{"tool":"execute"}', error: "trailing_content",
+  },
 ];

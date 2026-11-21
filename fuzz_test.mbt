@@ -388,3 +388,120 @@ test "streaming all raw UTF-16 boundaries reconstructs an exact report" {
   assert_eq(finalized.json, expected.json)
   assert_eq(finalized.edits, expected.edits)
 }
+
+///|
+fn exact_patch_value(left : Json, right : Json) -> Bool {
+  match (left, right) {
+    (Object(a), Object(b)) => {
+      if a.length() != b.length() {
+        return false
+      }
+      for name, value in a {
+        guard b.get(name) is Some(other) && exact_patch_value(value, other) else {
+          return false
+        }
+      }
+      true
+    }
+    (Array(a), Array(b)) => {
+      if a.length() != b.length() {
+        return false
+      }
+      for i in 0..<a.length() {
+        if !exact_patch_value(a[i], b[i]) {
+          return false
+        }
+      }
+      true
+    }
+    _ => left.stringify() == right.stringify()
+  }
+}
+
+///|
+let reasoning_fragments : Array[String] = [
+  "<think>{guess:'x', yes:True}</think>", "<THINK><think>[1,2]</think> 🌙 draft </THINK>\r\n",
+  "<think>{\"message\":\"literal </think>\"}</think>", "<think>truncated draft with {guess:false",
+  "<think>{draft:\"unfinished string\n</think>\n",
+]
+
+///|
+fn fuzz_stream_sample(rng : FuzzPrng) -> String {
+  let body = fuzz_documents[rng.pick(fuzz_documents.length())]
+  let end = if rng.pick(3) == 0 {
+    rng.pick(body.length() + 1)
+  } else {
+    body.length()
+  }
+  let prefix = body.unsafe_substring(start=0, end~)
+  let think = reasoning_fragments[rng.pick(reasoning_fragments.length())]
+  match rng.pick(4) {
+    0 => think + prefix
+    1 => prefix + "\n" + think
+    2 =>
+      think +
+      prefix +
+      "\n" +
+      reasoning_fragments[rng.pick(reasoning_fragments.length())]
+    _ => "{\"literal\":\"<think>~1/~0</think>\",\"value\":" + prefix
+  }
+}
+
+///|
+fn check_stream_patches(seed : UInt32) -> Unit raise {
+  let rng : FuzzPrng = { state: seed, }
+  let policy = @json_repair.RepairOptions::default().with_ignore_think_blocks(
+    true,
+  )
+  for _ in 0..<700 {
+    let source = fuzz_stream_sample(rng)
+    let stream = @json_repair.RepairStream::with_policy(policy)
+    let mut previous : Json = Json::null()
+    let mut start = 0
+    while start < source.length() {
+      let end = (start + 1 + rng.pick(31)).min(source.length())
+      stream.push(source.unsafe_substring(start~, end~)).unwrap()
+      start = end
+      assert_eq(stream.status().position.offset, end)
+      if stream.next_patches() is Ok(frame) {
+        let value = @json_repair.apply_json_patches(previous, frame.patches[:]).unwrap()
+        assert_true(exact_patch_value(value, frame.report.value), msg=source)
+        previous = value
+      }
+    }
+    let batch = @json_repair.repair_with_policy(source, policy)
+    let finalized = stream.finalize()
+    match (batch, finalized) {
+      (Ok(expected), Ok(report)) => {
+        assert_eq(report.json, expected.json)
+        assert_eq(report.edits, expected.edits)
+        let remaining = @json_repair.diff_json_patches(previous, report.value)
+        let value = @json_repair.apply_json_patches(previous, remaining[:]).unwrap()
+        assert_true(exact_patch_value(value, report.value))
+        verify_fuzz_result(source, finalized)
+      }
+      (Err(expected), Err(actual)) => assert_eq(actual, expected)
+      _ => fail("stream and batch disagreed")
+    }
+  }
+}
+
+///|
+test "seeded reasoning and Patch stream 127891247" {
+  check_stream_patches(127891247U)
+}
+
+///|
+test "seeded reasoning and Patch stream 4135001881" {
+  check_stream_patches(4135001881U)
+}
+
+///|
+test "seeded reasoning and Patch stream 2264504049" {
+  check_stream_patches(2264504049U)
+}
+
+///|
+test "seeded reasoning and Patch stream 3342188037" {
+  check_stream_patches(3342188037U)
+}
