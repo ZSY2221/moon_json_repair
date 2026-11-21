@@ -156,8 +156,15 @@ function traceProjection(source, model, edits, start, end) {
 
 function remapOutput(range, before, after) {
   if (before === after) return range;
-  const token = before.tokens.find(entry =>
-    entry.start <= range.start && range.start < entry.end) ?? before.tokens.at(-1);
+  let low = 0;
+  let high = before.tokens.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (before.tokens[middle].end <= range.start) low = middle + 1;
+    else high = middle;
+  }
+  const found = before.tokens[low];
+  const token = found && found.start <= range.start ? found : before.tokens.at(-1);
   const corresponding = token && after.identities.get(token.identity);
   if (corresponding && corresponding.text === token.text && range.end <= token.end) {
     return {

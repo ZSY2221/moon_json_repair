@@ -186,7 +186,7 @@ function showStreamStatus(status) {
     : "No checkpoint";
 }
 
-function selectionRows(result) {
+function selectionRows(result, source, elapsed) {
   const extracting = elements["enable-extraction"].checked;
   elements["block-picker"].hidden = !extracting;
   if (!extracting) return;
@@ -197,15 +197,42 @@ function selectionRows(result) {
     button.setAttribute("aria-pressed", String(index === blockIndex));
     button.addEventListener("click", () => {
       pausePlayback();
+      const previous = blockIndex;
+      const changed = index !== previous || auditIndex >= 0;
       blockIndex = index;
       auditIndex = -1;
-      render();
-      elements.blocks.children[index]?.focus();
+      // If edits or playback already queued a new frame, let it select the
+      // block from the new result instead of displaying this older snapshot.
+      if (!changed || pendingFrame) return;
+      elements.blocks.children[previous]?.setAttribute("aria-pressed", "false");
+      button.setAttribute("aria-pressed", "true");
+      showBlock(source, block, elapsed);
     });
     return button;
   });
   if (!buttons.length) buttons.push(node("span", "toolbar-label", "No candidate blocks"));
   elements.blocks.replaceChildren(...buttons);
+}
+
+function showBlock(source, block, elapsed) {
+  visualAudit = makeVisualAudit(source, block);
+  if (auditIndex >= visualAudit.edits.length) auditIndex = -1;
+  showOutput(visualAudit.output, "success", elapsed);
+  showAudit(visualAudit.edits, "The input was already valid JSON.");
+  paintSource(visualAudit.edits[auditIndex]?.source);
+  const validation = block.validation;
+  if (validation.state === "skipped") {
+    showSchema("idle", "Skipped", "Add a schema to validate this block.");
+  } else if (validation.state === "invalid_json") {
+    showSchema("fail", "Invalid schema", validation.message);
+  } else if (validation.errors.length) {
+    const count = validation.errors.length;
+    showSchema("fail", "Fail", count + (count === 1 ? " constraint error" : " constraint errors"), validation.errors, block.retry_prompt);
+  } else {
+    showSchema("pass", "Pass", block.coercions.length
+      ? "Validated after " + block.coercions.length + " schema coercion edits."
+      : "The repaired value satisfies the current schema.");
+  }
 }
 
 function render() {
@@ -254,7 +281,7 @@ function render() {
     return;
   }
   blockIndex = Math.min(blockIndex, Math.max(0, result.blocks.length - 1));
-  selectionRows(result);
+  selectionRows(result, source, elapsed);
   const block = result.blocks[blockIndex];
   if (!block) {
     showOutput("No complete or repairable candidate blocks found.", "idle", elapsed);
@@ -265,24 +292,7 @@ function render() {
   }
   rawReport = raw;
   elements.download.disabled = false;
-  visualAudit = makeVisualAudit(source, block);
-  if (auditIndex >= visualAudit.edits.length) auditIndex = -1;
-  showOutput(visualAudit.output, "success", elapsed);
-  showAudit(visualAudit.edits, "The input was already valid JSON.");
-  paintSource(visualAudit.edits[auditIndex]?.source);
-  const validation = block.validation;
-  if (validation.state === "skipped") {
-    showSchema("idle", "Skipped", "Add a schema to validate this block.");
-  } else if (validation.state === "invalid_json") {
-    showSchema("fail", "Invalid schema", validation.message);
-  } else if (validation.errors.length) {
-    const count = validation.errors.length;
-    showSchema("fail", "Fail", count + (count === 1 ? " constraint error" : " constraint errors"), validation.errors, block.retry_prompt);
-  } else {
-    showSchema("pass", "Pass", block.coercions.length
-      ? "Validated after " + block.coercions.length + " schema coercion edits."
-      : "The repaired value satisfies the current schema.");
-  }
+  showBlock(source, block, elapsed);
 }
 
 function scheduleRender() {

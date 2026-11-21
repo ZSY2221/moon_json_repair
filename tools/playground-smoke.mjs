@@ -104,10 +104,19 @@ try {
   const blocks = page.locator("#blocks button");
   assert.equal(await blocks.count(), 3);
   assert.match(await blocks.nth(0).textContent(), /Block 1 · \d+% · L\d/);
+  await page.evaluate(() => {
+    window.engineRunsForBlockSwitch = 0;
+    const run = window.moonLabRun;
+    window.moonLabRun = (...args) => {
+      window.engineRunsForBlockSwitch++;
+      return run(...args);
+    };
+  });
   await blocks.nth(1).click();
   await outputHas("9007199254740993");
   await blocks.nth(2).click();
   await outputHas("send_notice");
+  assert.equal(await page.evaluate(() => window.engineRunsForBlockSwitch), 0, "Switching an extracted block should reuse the rendered result");
   await page.locator("#enable-extraction").uncheck();
   await wait("#repair-state", "Unable to repair");
   await page.locator("#enable-extraction").check();
