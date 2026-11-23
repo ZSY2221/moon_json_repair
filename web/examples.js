@@ -158,14 +158,9 @@ const labFixtures = [
     description: "Normalize a field name and enum spelling while preserving the exact amount.",
     input: "{tool:'record_payment',args:{userName:'Ada',currency:' usd ',amount:'9007199254740993'}}",
     schema: toolSchema("record_payment", {
-      type: "object",
-      required: ["user_name", "currency", "amount"],
-      properties: {
-        user_name: { type: "string" },
-        currency: { enum: ["USD", "EUR"] },
-        amount: { type: "integer" },
-      },
-      additionalProperties: false,
+      user_name: { type: "string" },
+      currency: { enum: ["USD", "EUR"] },
+      amount: { type: "integer" },
     }),
     modes: { coerce: true, semantic: true, diagnostics: true },
   },

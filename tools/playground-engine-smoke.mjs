@@ -180,6 +180,22 @@ const noCoercion = runOptions(semanticInput, semanticSchema, { semantic: true })
 assert.ok(noCoercion.blocks[0].validation.errors.length >= 2, "Semantic repairs must be opt-in with schema coercion");
 assert.equal(noCoercion.blocks[0].coercions.length, 0);
 
+const semanticPreset = fixtures.labFixtures.find(({ label }) => label === "Semantic normalization");
+const presetSchema = JSON.stringify(semanticPreset.schema);
+const presetRepaired = runOptions(semanticPreset.input, presetSchema, semanticPreset.modes);
+assert.equal(presetRepaired.ok, true);
+const presetBlock = presetRepaired.blocks[0];
+assert.equal(presetBlock.output, '{"tool":"record_payment","args":{"currency":"USD","amount":9007199254740993,"user_name":"Ada"}}');
+assert.deepEqual(presetBlock.validation, { state: "checked", errors: [] });
+assert.deepEqual(presetBlock.coercions.map(({ path, kind }) => [path, kind]).sort(), [
+  ["$.args.amount", "string_to_number"],
+  ["$.args.currency", "normalize_enum"],
+  ["$.args.user_name", "rename_key"],
+]);
+assert.match(presetBlock.diagnostic, /\^/u);
+const presetStrict = runOptions(semanticPreset.input, presetSchema, { coerce: true, semantic: false });
+assert.ok(presetStrict.blocks[0].validation.errors.some(({ path }) => path === "$.args.user_name"));
+
 const duplicate = '{\r\n  "item": "星球🌙",\r\n  "item": "again"\r\n}';
 const badSchemaInput = '{\r\n  "user_name": "星球🌙",\r\n  "currency": "USD",\r\n  "amount": "wrong"\r\n}';
 for (const chinese of [false, true]) {

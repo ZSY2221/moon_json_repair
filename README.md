@@ -1,6 +1,6 @@
 # moon_json_repair
 
-[简体中文](README.zh-CN.md) · [Live Bilingual Playground](https://zsy2221.github.io/moon_json_repair/?lang=en) · [Mooncakes v0.5.0 Docs](https://mooncakes.io/docs/ZSY2221/json_repair%400.5.0) · [JS/TS Wasm GC SDK](https://github.com/ZSY2221/moon_json_repair/tree/main/packages/json-repair-wasm) · [![CI](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml/badge.svg)](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml)
+[简体中文](README.zh-CN.md) · [Same-input comparison](docs/DIFFERENTIATION.md) · [Live Bilingual Playground](https://zsy2221.github.io/moon_json_repair/?lang=en) · [Mooncakes v0.5.0 Docs](https://mooncakes.io/docs/ZSY2221/json_repair%400.5.0) · [JS/TS Wasm GC SDK](https://github.com/ZSY2221/moon_json_repair/tree/main/packages/json-repair-wasm) · [![CI](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml/badge.svg)](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml)
 
 Repair incomplete JSON from model streams and tool calls while preserving numeric lexemes such as `9007199254740993`. Inspect edits at their original UTF-16 positions, replay RFC 6902 patches, or validate arguments before invoking tools. A single MoonBit implementation supports **Wasm GC, JS, and Native**, with zero external MoonBit modules or project FFI.
 

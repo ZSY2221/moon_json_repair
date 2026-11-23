@@ -1,6 +1,6 @@
 # moon_json_repair
 
-[English README](README.md) · [在线双语演练台](https://zsy2221.github.io/moon_json_repair/?lang=zh) · [Mooncakes 0.5.0 文档](https://mooncakes.io/docs/ZSY2221/json_repair%400.5.0) · [JS/TS Wasm GC SDK](https://github.com/ZSY2221/moon_json_repair/tree/main/packages/json-repair-wasm) · [![CI](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml/badge.svg)](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml)
+[English README](README.md) · [同输入对照](docs/DIFFERENTIATION.md) · [在线双语演练台](https://zsy2221.github.io/moon_json_repair/?lang=zh) · [Mooncakes 0.5.0 文档](https://mooncakes.io/docs/ZSY2221/json_repair%400.5.0) · [JS/TS Wasm GC SDK](https://github.com/ZSY2221/moon_json_repair/tree/main/packages/json-repair-wasm) · [![CI](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml/badge.svg)](https://github.com/ZSY2221/moon_json_repair/actions/workflows/ci.yml)
 
 修复模型流和工具调用中的截断 JSON，保留 `9007199254740993` 等数字的原始拼写。修复操作可追溯到原输入的 UTF-16 位置。支持 RFC 6902 实时补丁、字段闭合状态，以及工具参数的 Schema 校验与可选类型自愈。库由纯 MoonBit 实现，支持 **Wasm GC、JS、Native**，零外部 MoonBit 模块，零项目 FFI。
 

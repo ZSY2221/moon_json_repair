@@ -363,6 +363,16 @@ try {
   assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n"),
     await page.locator("#cli-code").textContent());
 
+  await sample("Semantic normalization");
+  await wait("#output", "9007199254740993");
+  await wait("#schema-state", "Pass");
+  assert.match(await page.locator("#output").textContent(), /"user_name"\s*:\s*"Ada"/u);
+  assert.match(await page.locator("#output").textContent(), /"currency"\s*:\s*"USD"/u);
+  assert.ok(await page.locator("#enable-semantic").isChecked());
+  await page.locator("#enable-semantic").uncheck();
+  await wait("#schema-state", "Fail");
+  await page.locator("#enable-semantic").check();
+  await wait("#schema-state", "Pass");
   await sample("Stream cut");
   if (!(await page.locator("#schema").isVisible())) await page.locator("#schema-editor-label").click();
   await page.locator("#schema").fill('{"type":"object","required":["user_name","currency","amount"],"properties":{"user_name":{"type":"string"},"currency":{"enum":["USD","EUR"]},"amount":{"type":"integer"}}}');

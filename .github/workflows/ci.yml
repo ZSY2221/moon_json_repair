@@ -50,6 +50,9 @@ jobs:
       - name: Verify both generated playground engines
         run: node tools/playground-engine-smoke.mjs
         if: matrix.backend == 'js'
+      - name: Verify the streaming and audit evidence in both engines
+        run: node tools/verify-differentiation.mjs --no-timing --check-doc
+        if: matrix.backend == 'js'
       - name: Run the offline browser example with the compiled Wasm GC engine
         run: node tools/verify-examples.mjs --browser
         if: matrix.backend == 'js'

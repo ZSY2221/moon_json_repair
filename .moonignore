@@ -47,6 +47,10 @@
 !/mcp_guard_test.mbt
 !/patch_test.mbt
 
+!/docs/
+/docs/*
+!/docs/DIFFERENTIATION.md
+
 !/cmd/
 /cmd/*
 !/cmd/cli/
